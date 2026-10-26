@@ -20,9 +20,10 @@ import {
   User,
   Tag,
   Star,
-  Globe,
+  Zap,
   Menu,
-  X
+  X,
+  AlertTriangle
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -50,12 +51,12 @@ import {
 
 // 1. Firebase Initialization
 const firebaseConfig = {
-  apiKey: "AIzaSyAVgASm8uwkTsry8UY6UIv3ZxR-r1wBulg",
-  authDomain: "organizer-65170.firebaseapp.com",
-  projectId: "organizer-65170",
-  storageBucket: "organizer-65170.firebasestorage.app",
-  messagingSenderId: "695008460380",
-  appId: "1:695008460380:web:7d3140ea3103535267b099",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAVgASm8uwkTsry8UY6UIv3ZxR-r1wBulg",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "organizer-65170.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "organizer-65170",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "organizer-65170.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "695008460380",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:695008460380:web:7d3140ea3103535267b099",
 };
 
 const app = initializeApp(firebaseConfig);
@@ -94,6 +95,10 @@ export default function App() {
   const [linkTitle, setLinkTitle] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [linkTags, setLinkTags] = useState('');
+
+  // Custom Confirmation Modal State
+  const [folderToDelete, setFolderToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Track authentication state
   useEffect(() => {
@@ -153,7 +158,6 @@ export default function App() {
 
   const seedDefaultFolders = async (uid) => {
     const defaults = [
-      { name: 'Instant Links', parentId: null, userId: uid },
       { name: 'YouTube & Video', parentId: null, userId: uid },
       { name: 'Work & Projects', parentId: null, userId: uid }
     ];
@@ -213,13 +217,11 @@ export default function App() {
     setIsFolderModalOpen(false);
   };
 
-  const handleDeleteFolder = async (folderId, e) => {
-    e.stopPropagation();
-    if (!window.confirm("Delete this folder and all its contents?")) return;
-
+  // Recursive deletion helper
+  const deleteFolderRecursive = async (folderId) => {
     const childFolders = folders.filter(f => f.parentId === folderId);
     for (const child of childFolders) {
-      await handleDeleteFolder(child.id, e);
+      await deleteFolderRecursive(child.id);
     }
 
     const folderLinks = links.filter(l => l.folderId === folderId);
@@ -228,7 +230,30 @@ export default function App() {
     }
 
     await deleteDoc(doc(db, 'folders', folderId));
-    if (selectedFolderId === folderId) setSelectedFolderId(null);
+  };
+
+  // Trigger custom confirmation popup
+  const promptDeleteFolder = (folder, e) => {
+    e.stopPropagation();
+    setFolderToDelete(folder);
+  };
+
+  // Execute confirmed deletion
+  const confirmDeleteFolder = async () => {
+    if (!folderToDelete) return;
+    setIsDeleting(true);
+
+    try {
+      await deleteFolderRecursive(folderToDelete.id);
+      if (selectedFolderId === folderToDelete.id) {
+        setSelectedFolderId(null);
+      }
+    } catch (error) {
+      console.error("Error deleting folder:", error);
+    } finally {
+      setIsDeleting(false);
+      setFolderToDelete(null);
+    }
   };
 
   // Link Operations
@@ -270,7 +295,6 @@ export default function App() {
   };
 
   const handleDeleteLink = async (linkId) => {
-    if (!window.confirm("Delete this bookmark?")) return;
     await deleteDoc(doc(db, 'links', linkId));
   };
 
@@ -291,12 +315,17 @@ export default function App() {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
+  // Filter links: root links only when selectedFolderId === null
   const filteredLinks = links.filter(link => {
-    const matchesFolder = selectedFolderId === null || link.folderId === selectedFolderId;
+    const matchesFolder = selectedFolderId === null
+      ? (!link.folderId || link.folderId === null)
+      : link.folderId === selectedFolderId;
+
     const matchesSearch = searchQuery === '' ||
       link.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       link.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (link.tags && link.tags.some(t => t.includes(searchQuery.toLowerCase())));
+
     return matchesFolder && matchesSearch;
   });
 
@@ -320,20 +349,21 @@ export default function App() {
                 }}
                 className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm cursor-pointer transition ${
                   isSelected
-                    ? 'bg-blue-50 text-blue-700 font-semibold shadow-sm'
+                    ? 'bg-blue-50 text-blue-700 font-semibold shadow-xs'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <div className="flex items-center space-x-2 truncate">
+                <div className="flex items-center space-x-2 truncate flex-1 min-w-0 pr-1">
                   {hasChildren ? (
                     <button
+                      type="button"
                       onClick={(e) => toggleFolderExpand(folder.id, e)}
-                      className="p-0.5 hover:bg-slate-200 rounded"
+                      className="p-1 hover:bg-slate-200 rounded shrink-0"
                     >
                       {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                     </button>
                   ) : (
-                    <span className="w-3.5" />
+                    <span className="w-3.5 shrink-0" />
                   )}
                   {folder.name.toLowerCase().includes('youtube') || folder.name.toLowerCase().includes('video') ? (
                     <Video className="w-4 h-4 text-red-500 shrink-0" />
@@ -343,22 +373,25 @@ export default function App() {
                   <span className="truncate">{folder.name}</span>
                 </div>
 
-                <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-1">
+                {/* Subfolder and Delete buttons: visible on mobile, hover on desktop */}
+                <div className="flex items-center space-x-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0">
                   <button
+                    type="button"
                     title="Add Subfolder"
                     onClick={(e) => {
                       e.stopPropagation();
                       setParentFolderId(folder.id);
                       setIsFolderModalOpen(true);
                     }}
-                    className="p-1 hover:text-blue-600 rounded"
+                    className="p-1.5 hover:text-blue-600 hover:bg-blue-50 active:scale-95 rounded text-slate-400 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                   <button
+                    type="button"
                     title="Delete Folder"
-                    onClick={(e) => handleDeleteFolder(folder.id, e)}
-                    className="p-1 hover:text-red-600 rounded"
+                    onClick={(e) => promptDeleteFolder(folder, e)}
+                    className="p-1.5 hover:text-red-600 hover:bg-red-50 active:scale-95 rounded text-slate-400 transition"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -532,12 +565,12 @@ export default function App() {
               }}
               className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg text-sm transition ${
                 selectedFolderId === null
-                  ? 'bg-blue-50 text-blue-700 font-medium'
+                  ? 'bg-amber-50 text-amber-700 font-semibold'
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              <Globe className="w-4 h-4" />
-              <span>All Bookmarks</span>
+              <Zap className={`w-4 h-4 ${selectedFolderId === null ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
+              <span>Instant Links</span>
             </button>
 
             <div>
@@ -583,11 +616,15 @@ export default function App() {
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <FolderOpen className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
+              {selectedFolderId === null ? (
+                <Zap className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500 fill-amber-500 shrink-0" />
+              ) : (
+                <FolderOpen className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
+              )}
               <h2 className="text-sm sm:text-base font-semibold text-slate-800 truncate max-w-[160px] sm:max-w-xs">
                 {selectedFolderId
                   ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
-                  : 'All Bookmarks'}
+                  : 'Instant Links'}
               </h2>
               <span className="text-[11px] bg-slate-100 text-slate-500 font-medium px-2 py-0.5 rounded-full">
                 {filteredLinks.length}
@@ -602,14 +639,14 @@ export default function App() {
                 setLinkTags('');
                 setIsLinkModalOpen(true);
               }}
-              className="flex items-center space-x-1 sm:space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg transition shadow-sm shrink-0 sm:hidden"
+              className="flex items-center space-x-1 sm:space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg transition shadow-xs shrink-0 sm:hidden"
             >
               <Plus className="w-4 h-4" />
               <span>Add</span>
             </button>
           </div>
 
-          <div className="flex items-center space-x-2 w-full sm:w-auto">
+          <div className="flex items-center space-x-2 w-full sm:auto">
             <div className="relative flex-1 sm:w-64">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
@@ -628,7 +665,7 @@ export default function App() {
                 setLinkTags('');
                 setIsLinkModalOpen(true);
               }}
-              className="hidden sm:flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3.5 py-2 rounded-lg transition shadow-sm shrink-0"
+              className="hidden sm:flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3.5 py-2 rounded-lg transition shadow-xs shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>Add Link</span>
@@ -645,7 +682,9 @@ export default function App() {
               </div>
               <h3 className="text-sm font-semibold text-slate-700">No links in this view</h3>
               <p className="text-xs text-slate-400 max-w-xs mt-1">
-                Save articles, videos, documentation, and tools by clicking Add Link above.
+                {selectedFolderId === null
+                  ? 'Add your quick-access instant links right here.'
+                  : 'Save articles, videos, documentation, and tools by clicking Add Link above.'}
               </p>
             </div>
           ) : (
@@ -746,6 +785,54 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* CUSTOM CONFIRMATION POPUP FOR FOLDER DELETION */}
+      {folderToDelete && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start space-x-3.5">
+              <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-slate-800 text-sm">Delete Folder</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Are you sure you want to delete <span className="font-semibold text-slate-700">"{folderToDelete.name}"</span>?
+                </p>
+                <p className="text-[11px] text-red-500 mt-1 font-medium">
+                  This action cannot be undone and will delete all subfolders and links inside it.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 mt-5">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setFolderToDelete(null)}
+                className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteFolder}
+                className="px-4 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-xs transition flex items-center space-x-1.5"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Delete Folder</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: ADD FOLDER */}
       {isFolderModalOpen && (
