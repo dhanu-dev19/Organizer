@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, query, where, onSnapshot, addDoc,
@@ -6,12 +6,16 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
-import AuthScreen from './components/AuthScreen';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import FolderGrid from './components/FolderGrid';
 import LinkGrid from './components/LinkGrid';
-import { DeleteConfirmModal, FolderModal, LinkModal } from './components/Modals';
+
+// Lazy-load AuthScreen and Modals so they don't bloat the initial JS bundle
+const AuthScreen = lazy(() => import('./components/AuthScreen'));
+const DeleteConfirmModal = lazy(() => import('./components/Modals').then(m => ({ default: m.DeleteConfirmModal })));
+const FolderModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderModal })));
+const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -23,7 +27,10 @@ export default function App() {
   const [links, setLinks] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
+
+  // Instant input state + debounced search filter state
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
   // Modal States
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -35,6 +42,12 @@ export default function App() {
 
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Debounce search query by 200ms
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery.trim().toLowerCase()), 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Auth Listener
   useEffect(() => {
@@ -104,34 +117,70 @@ export default function App() {
     return trail;
   }, [selectedFolderId, folders]);
 
-  // Folder Navigation & Actions
-  const handleSelectFolder = (folderId) => {
+  // Stable Callbacks for Memoized Children
+  const handleSelectFolder = useCallback((folderId) => {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
 
     if (folderId && folderId !== 'favorites') {
-      const toExpand = {};
-      let curr = folders.find(f => f.id === folderId);
-      while (curr && curr.parentId) {
-        toExpand[curr.parentId] = true;
-        curr = folders.find(f => f.id === curr.parentId);
-      }
-      setExpandedFolders(prev => ({ ...prev, ...toExpand, [folderId]: true }));
+      setFolders(currentFolders => {
+        const toExpand = {};
+        let curr = currentFolders.find(f => f.id === folderId);
+        while (curr && curr.parentId) {
+          toExpand[curr.parentId] = true;
+          curr = currentFolders.find(f => f.id === curr.parentId);
+        }
+        setExpandedFolders(prev => ({ ...prev, ...toExpand, [folderId]: true }));
+        return currentFolders;
+      });
     }
-  };
+  }, []);
 
-  const openCreateFolderModal = (parentId = null) => {
+  const handleToggleExpand = useCallback((id, e) => {
+    e.stopPropagation();
+    setExpandedFolders(prev => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
+  const openCreateFolderModal = useCallback((parentId = null) => {
     setEditingFolder(null);
     setParentFolderId(parentId === 'favorites' ? null : parentId);
     setIsFolderModalOpen(true);
-  };
+  }, []);
 
-  const openRenameFolderModal = (folder, e) => {
+  const openRenameFolderModal = useCallback((folder, e) => {
     e.stopPropagation();
     setEditingFolder(folder);
     setParentFolderId(folder.parentId);
     setIsFolderModalOpen(true);
-  };
+  }, []);
+
+  const promptDeleteFolder = useCallback((folder, e) => {
+    e.stopPropagation();
+    setDeleteTarget({ type: 'folder', item: folder });
+  }, []);
+
+  const promptDeleteLink = useCallback((link, e) => {
+    if (e) e.stopPropagation();
+    setDeleteTarget({ type: 'link', item: link });
+  }, []);
+
+  const openAddLinkModal = useCallback(() => {
+    setEditingLink(null);
+    setIsLinkModalOpen(true);
+  }, []);
+
+  const openEditLinkModal = useCallback((link) => {
+    setEditingLink(link);
+    setIsLinkModalOpen(true);
+  }, []);
+
+  const handleToggleStar = useCallback(async (link) => {
+    await updateDoc(doc(db, 'links', link.id), { isStarred: !link.isStarred });
+  }, []);
+
+  const handleLogout = useCallback(() => signOut(auth), []);
+  const handleOpenMobileSidebar = useCallback(() => setIsMobileSidebarOpen(true), []);
+  const handleCloseMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
 
   const handleSaveFolder = async (name) => {
     if (!currentUser) return;
@@ -188,7 +237,6 @@ export default function App() {
     }
   };
 
-  // Link Actions
   const handleSaveLink = async ({ title, url, tags }) => {
     if (!currentUser) return;
     let formattedUrl = url.trim();
@@ -220,18 +268,14 @@ export default function App() {
     setIsLinkModalOpen(false);
   };
 
-  const handleToggleStar = async (link) => {
-    await updateDoc(doc(db, 'links', link.id), { isStarred: !link.isStarred });
-  };
-
-  // Filtered Views
+  // Memoized Filtered Views using debouncedSearch
   const currentSubfolders = useMemo(() => {
     if (selectedFolderId === null || selectedFolderId === 'favorites') return [];
     return folders.filter(f =>
       f.parentId === selectedFolderId &&
-      (searchQuery === '' || f.name.toLowerCase().includes(searchQuery.toLowerCase()))
+      (debouncedSearch === '' || f.name.toLowerCase().includes(debouncedSearch))
     );
-  }, [folders, selectedFolderId, searchQuery]);
+  }, [folders, selectedFolderId, debouncedSearch]);
 
   const filteredLinks = useMemo(() => {
     return links.filter(link => {
@@ -241,14 +285,14 @@ export default function App() {
           ? !link.folderId
           : link.folderId === selectedFolderId;
 
-      const matchesSearch = searchQuery === '' ||
-        link.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        link.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (link.tags && link.tags.some(t => t.includes(searchQuery.toLowerCase())));
+      const matchesSearch = debouncedSearch === '' ||
+        link.title.toLowerCase().includes(debouncedSearch) ||
+        link.url.toLowerCase().includes(debouncedSearch) ||
+        (link.tags && link.tags.some(t => t.includes(debouncedSearch)));
 
       return matchesView && matchesSearch;
     });
-  }, [links, selectedFolderId, searchQuery]);
+  }, [links, selectedFolderId, debouncedSearch]);
 
   if (authLoading) {
     return (
@@ -259,7 +303,15 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <AuthScreen />;
+    return (
+      <Suspense fallback={
+        <div className="min-h-screen flex items-center justify-center bg-slate-50">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </div>
+      }>
+        <AuthScreen />
+      </Suspense>
+    );
   }
 
   return (
@@ -267,23 +319,17 @@ export default function App() {
       <Sidebar
         currentUser={currentUser}
         isOpen={isMobileSidebarOpen}
-        onClose={() => setIsMobileSidebarOpen(false)}
+        onClose={handleCloseMobileSidebar}
         folders={folders}
         links={links}
         selectedFolderId={selectedFolderId}
         onSelectFolder={handleSelectFolder}
         expandedFolders={expandedFolders}
-        onToggleExpand={(id, e) => {
-          e.stopPropagation();
-          setExpandedFolders(prev => ({ ...prev, [id]: !prev[id] }));
-        }}
+        onToggleExpand={handleToggleExpand}
         onOpenCreateFolder={openCreateFolderModal}
         onOpenRenameFolder={openRenameFolderModal}
-        onPromptDeleteFolder={(folder, e) => {
-          e.stopPropagation();
-          setDeleteTarget({ type: 'folder', item: folder });
-        }}
-        onLogout={() => signOut(auth)}
+        onPromptDeleteFolder={promptDeleteFolder}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden">
@@ -291,14 +337,11 @@ export default function App() {
           selectedFolderId={selectedFolderId}
           breadcrumbs={breadcrumbs}
           onSelectFolder={handleSelectFolder}
-          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+          onOpenMobileSidebar={handleOpenMobileSidebar}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onOpenCreateFolder={openCreateFolderModal}
-          onOpenAddLink={() => {
-            setEditingLink(null);
-            setIsLinkModalOpen(true);
-          }}
+          onOpenAddLink={openAddLinkModal}
         />
 
         <div className="flex-1 p-3 sm:p-6 overflow-y-auto space-y-6">
@@ -308,10 +351,7 @@ export default function App() {
             allLinks={links}
             onSelectFolder={handleSelectFolder}
             onRenameFolder={openRenameFolderModal}
-            onDeleteFolder={(folder, e) => {
-              e.stopPropagation();
-              setDeleteTarget({ type: 'folder', item: folder });
-            }}
+            onDeleteFolder={promptDeleteFolder}
           />
 
           <LinkGrid
@@ -321,51 +361,50 @@ export default function App() {
             selectedFolderId={selectedFolderId}
             onSelectFolder={handleSelectFolder}
             onToggleStar={handleToggleStar}
-            onEditLink={(link) => {
-              setEditingLink(link);
-              setIsLinkModalOpen(true);
-            }}
-            onDeleteLink={(link, e) => {
-              if (e) e.stopPropagation();
-              setDeleteTarget({ type: 'link', item: link });
-            }}
-            onOpenAddLink={() => {
-              setEditingLink(null);
-              setIsLinkModalOpen(true);
-            }}
+            onEditLink={openEditLinkModal}
+            onDeleteLink={promptDeleteLink}
+            onOpenAddLink={openAddLinkModal}
             onOpenCreateFolder={openCreateFolderModal}
           />
         </div>
       </main>
 
-      <DeleteConfirmModal
-        deleteTarget={deleteTarget}
-        isDeleting={isDeleting}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
-      />
+      <Suspense fallback={null}>
+        {deleteTarget && (
+          <DeleteConfirmModal
+            deleteTarget={deleteTarget}
+            isDeleting={isDeleting}
+            onClose={() => setDeleteTarget(null)}
+            onConfirm={handleConfirmDelete}
+          />
+        )}
 
-      <FolderModal
-        isOpen={isFolderModalOpen}
-        editingFolder={editingFolder}
-        parentFolderId={parentFolderId}
-        onClose={() => {
-          setIsFolderModalOpen(false);
-          setEditingFolder(null);
-        }}
-        onSave={handleSaveFolder}
-      />
+        {isFolderModalOpen && (
+          <FolderModal
+            isOpen={isFolderModalOpen}
+            editingFolder={editingFolder}
+            parentFolderId={parentFolderId}
+            onClose={() => {
+              setIsFolderModalOpen(false);
+              setEditingFolder(null);
+            }}
+            onSave={handleSaveFolder}
+          />
+        )}
 
-      <LinkModal
-        isOpen={isLinkModalOpen}
-        editingLink={editingLink}
-        isFavoritesView={selectedFolderId === 'favorites'}
-        onClose={() => {
-          setIsLinkModalOpen(false);
-          setEditingLink(null);
-        }}
-        onSave={handleSaveLink}
-      />
+        {isLinkModalOpen && (
+          <LinkModal
+            isOpen={isLinkModalOpen}
+            editingLink={editingLink}
+            isFavoritesView={selectedFolderId === 'favorites'}
+            onClose={() => {
+              setIsLinkModalOpen(false);
+              setEditingLink(null);
+            }}
+            onSave={handleSaveLink}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

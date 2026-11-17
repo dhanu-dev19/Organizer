@@ -5,7 +5,7 @@ import {
   Plus, Pencil, Trash2
 } from 'lucide-react';
 
-export default function Sidebar({
+const Sidebar = React.memo( function Sidebar({
   currentUser,
   isOpen,
   onClose,
@@ -220,4 +220,6 @@ export default function Sidebar({
       </aside>
     </>
   );
-}
+});
+
+export default Sidebar;

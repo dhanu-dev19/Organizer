@@ -1,7 +1,7 @@
 import React from 'react';
 import { Menu, Star, Zap, ChevronRight, Plus, Search, FolderPlus } from 'lucide-react';
 
-export default function Header({
+const Header = React.memo( function Header({
   selectedFolderId,
   breadcrumbs,
   onSelectFolder,
@@ -110,4 +110,6 @@ export default function Header({
       </div>
     </header>
   );
-}
+});
+
+export default Header;

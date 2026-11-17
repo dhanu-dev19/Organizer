@@ -4,7 +4,7 @@ import {
   Folder, Zap, Tag, Check, Copy, Edit3, Trash2
 } from 'lucide-react';
 
-export default function LinkGrid({
+const LinkGrid = React.memo(function LinkGrid({
   links,
   subfoldersCount,
   allFolders,
@@ -196,4 +196,6 @@ export default function LinkGrid({
       )}
     </div>
   );
-}
+});
+
+export default LinkGrid;

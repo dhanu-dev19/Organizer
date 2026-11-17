@@ -1,7 +1,7 @@
 import React from 'react';
 import { Video, Folder, Pencil, Trash2 } from 'lucide-react';
 
-export default function FolderGrid({
+const FolderGrid = React.memo(function FolderGrid({
   subfolders,
   allFolders,
   allLinks,
@@ -70,4 +70,6 @@ export default function FolderGrid({
       </div>
     </div>
   );
-}
+});
+
+export default FolderGrid;
