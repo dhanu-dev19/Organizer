@@ -1,20 +1,28 @@
 import React from 'react';
-import { Menu, Star, Zap, ChevronRight, Plus, Search, FolderPlus } from 'lucide-react';
+import {
+  Menu, Star, Zap, ChevronRight, Plus, Search,
+  FolderPlus, ArrowUpDown, Calendar
+} from 'lucide-react';
 
-const Header = React.memo( function Header({
+const Header = React.memo(function Header({
   selectedFolderId,
   breadcrumbs,
   onSelectFolder,
   onOpenMobileSidebar,
   searchQuery,
   onSearchChange,
+  sortBy,
+  onSortChange,
+  dateFilter,
+  onDateFilterChange,
   onOpenCreateFolder,
   onOpenAddLink
 }) {
   const isFolderView = selectedFolderId !== null && selectedFolderId !== 'favorites';
 
   return (
-    <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+    <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0">
+      {/* Top Row: Breadcrumbs & Mobile Add Button */}
       <div className="flex items-center justify-between min-w-0">
         <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto no-scrollbar py-0.5">
           <button
@@ -76,17 +84,49 @@ const Header = React.memo( function Header({
         </button>
       </div>
 
-      {/* Search & Desktop Action Buttons */}
-      <div className="flex items-center space-x-2 w-full sm:w-auto">
-        <div className="relative flex-1 sm:w-56 lg:w-64">
+      {/* Controls Row: Search, Date Filter, Sort Order & Actions */}
+      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full lg:w-auto">
+        {/* Search Input */}
+        <div className="relative flex-1 sm:w-48 xl:w-60 min-w-[140px]">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2" />
           <input
             type="text"
-            placeholder="Search in view..."
+            placeholder="Search links, tags..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
           />
+        </div>
+
+        {/* Date Range Filter */}
+        <div className="relative shrink-0">
+          <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
+          <select
+            aria-label="Filter by date"
+            value={dateFilter}
+            onChange={(e) => onDateFilterChange(e.target.value)}
+            className="pl-8 pr-6 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
+          >
+            <option value="all">All Dates</option>
+            <option value="today">Today</option>
+            <option value="week">Last 7 Days</option>
+            <option value="month">Last 30 Days</option>
+          </select>
+        </div>
+
+        {/* Sort Order Selector */}
+        <div className="relative shrink-0">
+          <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
+          <select
+            aria-label="Sort items"
+            value={sortBy}
+            onChange={(e) => onSortChange(e.target.value)}
+            className="pl-8 pr-6 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
+          >
+            <option value="newest">Newest (Desc)</option>
+            <option value="oldest">Oldest (Asc)</option>
+            <option value="modified">Modified</option>
+          </select>
         </div>
 
         {isFolderView && (
@@ -96,7 +136,7 @@ const Header = React.memo( function Header({
             title="Create Subfolder Here"
           >
             <FolderPlus className="w-4 h-4 text-slate-500" />
-            <span className="hidden md:inline">Subfolder</span>
+            <span className="hidden xl:inline">Subfolder</span>
           </button>
         )}
 

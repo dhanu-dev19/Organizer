@@ -11,11 +11,18 @@ import Header from './components/Header';
 import FolderGrid from './components/FolderGrid';
 import LinkGrid from './components/LinkGrid';
 
-// Lazy-load AuthScreen and Modals so they don't bloat the initial JS bundle
 const AuthScreen = lazy(() => import('./components/AuthScreen'));
 const DeleteConfirmModal = lazy(() => import('./components/Modals').then(m => ({ default: m.DeleteConfirmModal })));
 const FolderModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderModal })));
 const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));
+
+// Safely extracts milliseconds from Firestore Timestamp, Date, or numeric value
+const getTimestampMs = (ts) => {
+  if (!ts) return Date.now(); // Optimistic fallback for newly created items awaiting serverTimestamp
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (ts.seconds) return ts.seconds * 1000;
+  return new Date(ts).getTime() || 0;
+};
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -28,9 +35,11 @@ export default function App() {
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
 
-  // Instant input state + debounced search filter state
+  // Search, Sort & Date Filter States (Default: Newest first)
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'oldest' | 'modified'
+  const [dateFilter, setDateFilter] = useState('all'); // 'all' | 'today' | 'week' | 'month'
 
   // Modal States
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -117,7 +126,7 @@ export default function App() {
     return trail;
   }, [selectedFolderId, folders]);
 
-  // Stable Callbacks for Memoized Children
+  // Stable Callbacks
   const handleSelectFolder = useCallback((folderId) => {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
@@ -175,7 +184,10 @@ export default function App() {
   }, []);
 
   const handleToggleStar = useCallback(async (link) => {
-    await updateDoc(doc(db, 'links', link.id), { isStarred: !link.isStarred });
+    await updateDoc(doc(db, 'links', link.id), {
+      isStarred: !link.isStarred,
+      updatedAt: serverTimestamp()
+    });
   }, []);
 
   const handleLogout = useCallback(() => signOut(auth), []);
@@ -268,31 +280,71 @@ export default function App() {
     setIsLinkModalOpen(false);
   };
 
-  // Memoized Filtered Views using debouncedSearch
+  // Shared Date Range Check & Sort Comparator
+  const matchesDateRange = useCallback((item) => {
+    if (dateFilter === 'all') return true;
+    const targetMs = sortBy === 'modified'
+      ? getTimestampMs(item.updatedAt || item.createdAt)
+      : getTimestampMs(item.createdAt);
+
+    const now = new Date();
+    if (dateFilter === 'today') {
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      return targetMs >= startOfDay;
+    }
+    if (dateFilter === 'week') {
+      return targetMs >= now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    }
+    if (dateFilter === 'month') {
+      return targetMs >= now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    }
+    return true;
+  }, [dateFilter, sortBy]);
+
+  const sortItems = useCallback((a, b) => {
+    if (sortBy === 'oldest') {
+      return getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt); // Ascending
+    }
+    if (sortBy === 'modified') {
+      const aMod = getTimestampMs(a.updatedAt || a.createdAt);
+      const bMod = getTimestampMs(b.updatedAt || b.createdAt);
+      return bMod - aMod; // Most recently modified first
+    }
+    // Default: 'newest' (Descending)
+    return getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt);
+  }, [sortBy]);
+
+  // Filtered & Sorted Subfolders
   const currentSubfolders = useMemo(() => {
     if (selectedFolderId === null || selectedFolderId === 'favorites') return [];
-    return folders.filter(f =>
-      f.parentId === selectedFolderId &&
-      (debouncedSearch === '' || f.name.toLowerCase().includes(debouncedSearch))
-    );
-  }, [folders, selectedFolderId, debouncedSearch]);
+    return folders
+      .filter(f =>
+        f.parentId === selectedFolderId &&
+        (debouncedSearch === '' || f.name.toLowerCase().includes(debouncedSearch)) &&
+        matchesDateRange(f)
+      )
+      .sort(sortItems);
+  }, [folders, selectedFolderId, debouncedSearch, matchesDateRange, sortItems]);
 
+  // Filtered & Sorted Links
   const filteredLinks = useMemo(() => {
-    return links.filter(link => {
-      const matchesView = selectedFolderId === 'favorites'
-        ? Boolean(link.isStarred)
-        : selectedFolderId === null
-          ? !link.folderId
-          : link.folderId === selectedFolderId;
+    return links
+      .filter(link => {
+        const matchesView = selectedFolderId === 'favorites'
+          ? Boolean(link.isStarred)
+          : selectedFolderId === null
+            ? !link.folderId
+            : link.folderId === selectedFolderId;
 
-      const matchesSearch = debouncedSearch === '' ||
-        link.title.toLowerCase().includes(debouncedSearch) ||
-        link.url.toLowerCase().includes(debouncedSearch) ||
-        (link.tags && link.tags.some(t => t.includes(debouncedSearch)));
+        const matchesSearch = debouncedSearch === '' ||
+          link.title.toLowerCase().includes(debouncedSearch) ||
+          link.url.toLowerCase().includes(debouncedSearch) ||
+          (link.tags && link.tags.some(t => t.includes(debouncedSearch)));
 
-      return matchesView && matchesSearch;
-    });
-  }, [links, selectedFolderId, debouncedSearch]);
+        return matchesView && matchesSearch && matchesDateRange(link);
+      })
+      .sort(sortItems);
+  }, [links, selectedFolderId, debouncedSearch, matchesDateRange, sortItems]);
 
   if (authLoading) {
     return (
@@ -340,6 +392,10 @@ export default function App() {
           onOpenMobileSidebar={handleOpenMobileSidebar}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          sortBy={sortBy}
+          onSortChange={setSortBy}
+          dateFilter={dateFilter}
+          onDateFilterChange={setDateFilter}
           onOpenCreateFolder={openCreateFolderModal}
           onOpenAddLink={openAddLinkModal}
         />
