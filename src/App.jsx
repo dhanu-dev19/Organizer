@@ -52,12 +52,12 @@ import {
 
 // 1. Firebase Initialization
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAVgASm8uwkTsry8UY6UIv3ZxR-r1wBulg",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "organizer-65170.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "organizer-65170",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "organizer-65170.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "695008460380",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:695008460380:web:7d3140ea3103535267b099",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
