@@ -67,17 +67,21 @@ export function DeleteConfirmModal({ deleteTarget, isDeleting, onClose, onConfir
 
 export function FolderModal({ isOpen, editingFolder, parentFolderId, onClose, onSave }) {
   const [name, setName] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setName(editingFolder ? editingFolder.name : '');
+    setIsSaving(false);
   }, [editingFolder, isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim()) return;
-    onSave(name.trim());
+    if (!name.trim() || isSaving) return;
+    setIsSaving(true);
+    await onSave(name.trim());
+    setIsSaving(false);
   };
 
   return (
@@ -94,25 +98,35 @@ export function FolderModal({ isOpen, editingFolder, parentFolderId, onClose, on
           <input
             type="text"
             required
+            disabled={isSaving}
             placeholder="Folder name..."
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-60"
             autoFocus
           />
           <div className="flex justify-end space-x-2">
             <button
               type="button"
+              disabled={isSaving}
               onClick={onClose}
-              className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-3.5 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs"
+              disabled={isSaving}
+              className="px-3.5 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg shadow-xs flex items-center space-x-1.5"
             >
-              {editingFolder ? 'Save' : 'Create'}
+              {isSaving ? (
+                <>
+                  <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <span>{editingFolder ? 'Save' : 'Create'}</span>
+              )}
             </button>
           </div>
         </form>
@@ -125,6 +139,7 @@ export function LinkModal({ isOpen, editingLink, isFavoritesView, onClose, onSav
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
   const [tags, setTags] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (editingLink) {
@@ -136,14 +151,17 @@ export function LinkModal({ isOpen, editingLink, isFavoritesView, onClose, onSav
       setUrl('');
       setTags('');
     }
+    setIsSaving(false);
   }, [editingLink, isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!title.trim() || !url.trim()) return;
-    onSave({ title, url, tags });
+    if (!title.trim() || !url.trim() || isSaving) return;
+    setIsSaving(true);
+    await onSave({ title, url, tags });
+    setIsSaving(false);
   };
 
   return (
@@ -162,10 +180,11 @@ export function LinkModal({ isOpen, editingLink, isFavoritesView, onClose, onSav
             <input
               type="text"
               required
+              disabled={isSaving}
               placeholder="e.g., GitHub, React Documentation"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-60"
               autoFocus
             />
           </div>
@@ -175,10 +194,11 @@ export function LinkModal({ isOpen, editingLink, isFavoritesView, onClose, onSav
             <input
               type="text"
               required
+              disabled={isSaving}
               placeholder="https://example.com"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-60"
             />
           </div>
 
@@ -186,26 +206,36 @@ export function LinkModal({ isOpen, editingLink, isFavoritesView, onClose, onSav
             <label className="block text-xs font-medium text-slate-600 mb-1">Tags (comma-separated)</label>
             <input
               type="text"
+              disabled={isSaving}
               placeholder="dev, video, tutorial"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-60"
             />
           </div>
 
           <div className="flex justify-end space-x-2 pt-2">
             <button
               type="button"
+              disabled={isSaving}
               onClick={onClose}
-              className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs"
+              disabled={isSaving}
+              className="px-4 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg shadow-xs flex items-center space-x-1.5"
             >
-              {editingLink ? 'Save Changes' : 'Add Link'}
+              {isSaving ? (
+                <>
+                  <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>{editingLink ? 'Saving...' : 'Adding...'}</span>
+                </>
+              ) : (
+                <span>{editingLink ? 'Save Changes' : 'Add Link'}</span>
+              )}
             </button>
           </div>
         </form>

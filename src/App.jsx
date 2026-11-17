@@ -194,26 +194,31 @@ export default function App() {
   const handleOpenMobileSidebar = useCallback(() => setIsMobileSidebarOpen(true), []);
   const handleCloseMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
 
+  // Optimistic Save Folder (closes modal immediately)
   const handleSaveFolder = async (name) => {
     if (!currentUser) return;
-    if (editingFolder) {
-      await updateDoc(doc(db, 'folders', editingFolder.id), {
+    const targetParent = parentFolderId;
+    const targetEdit = editingFolder;
+
+    setIsFolderModalOpen(false);
+    setEditingFolder(null);
+
+    if (targetEdit) {
+      await updateDoc(doc(db, 'folders', targetEdit.id), {
         name,
         updatedAt: serverTimestamp()
       });
     } else {
       await addDoc(collection(db, 'folders'), {
         name,
-        parentId: parentFolderId,
+        parentId: targetParent,
         userId: currentUser.uid,
         createdAt: serverTimestamp()
       });
-      if (parentFolderId) {
-        setExpandedFolders(prev => ({ ...prev, [parentFolderId]: true }));
+      if (targetParent) {
+        setExpandedFolders(prev => ({ ...prev, [targetParent]: true }));
       }
     }
-    setIsFolderModalOpen(false);
-    setEditingFolder(null);
   };
 
   // Recursive Delete
@@ -249,6 +254,7 @@ export default function App() {
     }
   };
 
+  // Optimistic Save Link (closes modal immediately; local cache renders new card instantly)
   const handleSaveLink = async ({ title, url, tags }) => {
     if (!currentUser) return;
     let formattedUrl = url.trim();
@@ -256,9 +262,13 @@ export default function App() {
       formattedUrl = 'https://' + formattedUrl;
     }
     const tagsArray = tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    const targetEdit = editingLink;
 
-    if (editingLink) {
-      await updateDoc(doc(db, 'links', editingLink.id), {
+    setEditingLink(null);
+    setIsLinkModalOpen(false);
+
+    if (targetEdit) {
+      await updateDoc(doc(db, 'links', targetEdit.id), {
         title: title.trim(),
         url: formattedUrl,
         tags: tagsArray,
@@ -276,8 +286,6 @@ export default function App() {
         createdAt: serverTimestamp()
       });
     }
-    setEditingLink(null);
-    setIsLinkModalOpen(false);
   };
 
   // Shared Date Range Check & Sort Comparator
