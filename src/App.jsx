@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Folder,
   FolderPlus,
@@ -23,7 +23,9 @@ import {
   Zap,
   Menu,
   X,
-  AlertTriangle
+  AlertTriangle,
+  Pencil,
+  ArrowUpRight
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -85,11 +87,13 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedId, setCopiedId] = useState(null);
 
-  // Modals
+  // Folder Create / Rename Modal
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
+  const [folderNameInput, setFolderNameInput] = useState('');
   const [parentFolderId, setParentFolderId] = useState(null);
+  const [editingFolder, setEditingFolder] = useState(null);
 
+  // Link Create / Edit Modal
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [editingLink, setEditingLink] = useState(null);
   const [linkTitle, setLinkTitle] = useState('');
@@ -197,23 +201,81 @@ export default function App() {
     await signOut(auth);
   };
 
-  // Folder Operations
-  const handleCreateFolder = async (e) => {
+  // Build Breadcrumb Trail for current folder
+  const breadcrumbs = useMemo(() => {
+    const trail = [];
+    let currentId = selectedFolderId;
+    const visited = new Set();
+
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const found = folders.find(f => f.id === currentId);
+      if (found) {
+        trail.unshift(found);
+        currentId = found.parentId;
+      } else {
+        break;
+      }
+    }
+    return trail;
+  }, [selectedFolderId, folders]);
+
+  // Select folder & auto-expand its parents in sidebar
+  const handleSelectFolder = (folderId) => {
+    setSelectedFolderId(folderId);
+    setIsMobileSidebarOpen(false);
+
+    if (folderId) {
+      const toExpand = {};
+      let curr = folders.find(f => f.id === folderId);
+      while (curr && curr.parentId) {
+        toExpand[curr.parentId] = true;
+        curr = folders.find(f => f.id === curr.parentId);
+      }
+      setExpandedFolders(prev => ({ ...prev, ...toExpand, [folderId]: true }));
+    }
+  };
+
+  // Open Create or Rename Folder Modal
+  const openCreateFolderModal = (parentId = null) => {
+    setEditingFolder(null);
+    setParentFolderId(parentId);
+    setFolderNameInput('');
+    setIsFolderModalOpen(true);
+  };
+
+  const openRenameFolderModal = (folder, e) => {
+    e.stopPropagation();
+    setEditingFolder(folder);
+    setParentFolderId(folder.parentId);
+    setFolderNameInput(folder.name);
+    setIsFolderModalOpen(true);
+  };
+
+  const handleSaveFolder = async (e) => {
     e.preventDefault();
-    if (!newFolderName.trim() || !currentUser) return;
+    if (!folderNameInput.trim() || !currentUser) return;
 
-    await addDoc(collection(db, 'folders'), {
-      name: newFolderName.trim(),
-      parentId: parentFolderId,
-      userId: currentUser.uid,
-      createdAt: serverTimestamp()
-    });
+    if (editingFolder) {
+      await updateDoc(doc(db, 'folders', editingFolder.id), {
+        name: folderNameInput.trim(),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      await addDoc(collection(db, 'folders'), {
+        name: folderNameInput.trim(),
+        parentId: parentFolderId,
+        userId: currentUser.uid,
+        createdAt: serverTimestamp()
+      });
 
-    if (parentFolderId) {
-      setExpandedFolders(prev => ({ ...prev, [parentFolderId]: true }));
+      if (parentFolderId) {
+        setExpandedFolders(prev => ({ ...prev, [parentFolderId]: true }));
+      }
     }
 
-    setNewFolderName('');
+    setFolderNameInput('');
+    setEditingFolder(null);
     setIsFolderModalOpen(false);
   };
 
@@ -232,13 +294,11 @@ export default function App() {
     await deleteDoc(doc(db, 'folders', folderId));
   };
 
-  // Trigger custom confirmation popup
   const promptDeleteFolder = (folder, e) => {
     e.stopPropagation();
     setFolderToDelete(folder);
   };
 
-  // Execute confirmed deletion
   const confirmDeleteFolder = async () => {
     if (!folderToDelete) return;
     setIsDeleting(true);
@@ -246,7 +306,7 @@ export default function App() {
     try {
       await deleteFolderRecursive(folderToDelete.id);
       if (selectedFolderId === folderToDelete.id) {
-        setSelectedFolderId(null);
+        setSelectedFolderId(folderToDelete.parentId || null);
       }
     } catch (error) {
       console.error("Error deleting folder:", error);
@@ -315,26 +375,40 @@ export default function App() {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
-  // Filter links: root links only when selectedFolderId === null
-  const filteredLinks = links.filter(link => {
-    const matchesFolder = selectedFolderId === null
-      ? (!link.folderId || link.folderId === null)
-      : link.folderId === selectedFolderId;
+  // Subfolders inside the currently selected folder (shown in main body)
+  // Note: When selectedFolderId === null ("Instant Links"), we only show root links, keeping root folders in the sidebar.
+  const currentSubfolders = useMemo(() => {
+    if (selectedFolderId === null) return [];
+    return folders.filter(f => {
+      const matchesParent = f.parentId === selectedFolderId;
+      const matchesSearch = searchQuery === '' || f.name.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesParent && matchesSearch;
+    });
+  }, [folders, selectedFolderId, searchQuery]);
 
-    const matchesSearch = searchQuery === '' ||
-      link.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      link.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (link.tags && link.tags.some(t => t.includes(searchQuery.toLowerCase())));
+  // Links inside the currently selected folder (or root links if selectedFolderId === null)
+  const filteredLinks = useMemo(() => {
+    return links.filter(link => {
+      const matchesFolder = selectedFolderId === null
+        ? (!link.folderId || link.folderId === null)
+        : link.folderId === selectedFolderId;
 
-    return matchesFolder && matchesSearch;
-  });
+      const matchesSearch = searchQuery === '' ||
+        link.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        link.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (link.tags && link.tags.some(t => t.includes(searchQuery.toLowerCase())));
 
+      return matchesFolder && matchesSearch;
+    });
+  }, [links, selectedFolderId, searchQuery]);
+
+  // Sidebar Recursive Tree Renderer
   const renderFolderTree = (parentId = null, depth = 0) => {
     const currentLevelFolders = folders.filter(f => f.parentId === parentId);
     if (currentLevelFolders.length === 0) return null;
 
     return (
-      <div className={`space-y-1 ${depth > 0 ? 'ml-3 border-l border-slate-200 pl-2' : ''}`}>
+      <div className={`space-y-0.5 ${depth > 0 ? 'ml-3 border-l border-slate-200/80 pl-2 mt-0.5' : ''}`}>
         {currentLevelFolders.map(folder => {
           const hasChildren = folders.some(f => f.parentId === folder.id);
           const isExpanded = !!expandedFolders[folder.id];
@@ -343,55 +417,61 @@ export default function App() {
           return (
             <div key={folder.id} className="group flex flex-col">
               <div
-                onClick={() => {
-                  setSelectedFolderId(folder.id);
-                  setIsMobileSidebarOpen(false);
-                }}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm cursor-pointer transition ${
+                onClick={() => handleSelectFolder(folder.id)}
+                className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-sm cursor-pointer transition-all duration-150 ${
                   isSelected
-                    ? 'bg-blue-50 text-blue-700 font-semibold shadow-xs'
+                    ? 'bg-blue-50 text-blue-700 font-semibold shadow-2xs'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
-                <div className="flex items-center space-x-2 truncate flex-1 min-w-0 pr-1">
+                <div className="flex items-center space-x-1.5 truncate flex-1 min-w-0 pr-1">
                   {hasChildren ? (
                     <button
                       type="button"
                       onClick={(e) => toggleFolderExpand(folder.id, e)}
-                      className="p-1 hover:bg-slate-200 rounded shrink-0"
+                      className="p-0.5 hover:bg-slate-200/80 rounded shrink-0 transition-transform"
                     >
                       {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                     </button>
                   ) : (
-                    <span className="w-3.5 shrink-0" />
+                    <span className="w-4 shrink-0" />
                   )}
                   {folder.name.toLowerCase().includes('youtube') || folder.name.toLowerCase().includes('video') ? (
                     <Video className="w-4 h-4 text-red-500 shrink-0" />
+                  ) : isSelected ? (
+                    <FolderOpen className="w-4 h-4 text-blue-600 shrink-0" />
                   ) : (
-                    <Folder className={`w-4 h-4 ${isSelected ? 'text-blue-600' : 'text-slate-400'} shrink-0`} />
+                    <Folder className="w-4 h-4 text-slate-400 shrink-0" />
                   )}
                   <span className="truncate">{folder.name}</span>
                 </div>
 
-                {/* Subfolder and Delete buttons: visible on mobile, hover on desktop */}
+                {/* Action buttons: visible on mobile, reveal smoothly on desktop hover */}
                 <div className="flex items-center space-x-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0">
                   <button
                     type="button"
                     title="Add Subfolder"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setParentFolderId(folder.id);
-                      setIsFolderModalOpen(true);
+                      openCreateFolderModal(folder.id);
                     }}
-                    className="p-1.5 hover:text-blue-600 hover:bg-blue-50 active:scale-95 rounded text-slate-400 transition"
+                    className="p-1 hover:text-blue-600 hover:bg-blue-100/70 active:scale-95 rounded text-slate-400 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
+                    title="Rename Folder"
+                    onClick={(e) => openRenameFolderModal(folder, e)}
+                    className="p-1 hover:text-slate-700 hover:bg-slate-200/70 active:scale-95 rounded text-slate-400 transition"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
                     title="Delete Folder"
                     onClick={(e) => promptDeleteFolder(folder, e)}
-                    className="p-1.5 hover:text-red-600 hover:bg-red-50 active:scale-95 rounded text-slate-400 transition"
+                    className="p-1 hover:text-red-600 hover:bg-red-100/70 active:scale-95 rounded text-slate-400 transition"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -446,7 +526,7 @@ export default function App() {
                   placeholder="you@example.com"
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                 />
               </div>
             </div>
@@ -461,7 +541,7 @@ export default function App() {
                   placeholder="••••••••"
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                 />
               </div>
             </div>
@@ -517,32 +597,29 @@ export default function App() {
       {isMobileSidebarOpen && (
         <div
           onClick={() => setIsMobileSidebarOpen(false)}
-          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 md:hidden"
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 md:hidden transition-opacity"
         />
       )}
 
       {/* Sidebar (Drawer on Mobile, Fixed Sidebar on Desktop) */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 ${
-          isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        className={`fixed inset-y-0 left-0 z-50 w-72 md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between transform transition-transform duration-200 ease-out md:static md:translate-x-0 ${
+          isMobileSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'
         }`}
       >
-        <div>
+        <div className="flex flex-col flex-1 min-h-0">
           {/* Brand header */}
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between shrink-0">
             <div className="flex items-center space-x-2.5">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold">
+              <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs">
                 <Bookmark className="w-4 h-4" />
               </div>
               <span className="font-bold text-slate-900 text-sm tracking-wide">Organizer</span>
             </div>
             <div className="flex items-center space-x-1">
               <button
-                title="Add Root Folder"
-                onClick={() => {
-                  setParentFolderId(null);
-                  setIsFolderModalOpen(true);
-                }}
+                title="New Root Folder"
+                onClick={() => openCreateFolderModal(null)}
                 className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-800 transition"
               >
                 <FolderPlus className="w-4 h-4" />
@@ -557,25 +634,33 @@ export default function App() {
           </div>
 
           {/* Navigation & Folders list */}
-          <div className="p-3 space-y-4 overflow-y-auto max-h-[calc(100vh-140px)]">
+          <div className="p-3 space-y-4 overflow-y-auto flex-1">
             <button
-              onClick={() => {
-                setSelectedFolderId(null);
-                setIsMobileSidebarOpen(false);
-              }}
-              className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg text-sm transition ${
+              onClick={() => handleSelectFolder(null)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
                 selectedFolderId === null
-                  ? 'bg-amber-50 text-amber-700 font-semibold'
+                  ? 'bg-amber-50 text-amber-800 font-semibold shadow-2xs'
                   : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              <Zap className={`w-4 h-4 ${selectedFolderId === null ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
-              <span>Instant Links</span>
+              <div className="flex items-center space-x-2.5">
+                <Zap className={`w-4 h-4 ${selectedFolderId === null ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
+                <span>Instant Links</span>
+              </div>
+              <span className="text-[11px] text-slate-400 font-medium">
+                {links.filter(l => !l.folderId).length}
+              </span>
             </button>
 
             <div>
               <div className="flex items-center justify-between px-3 mb-1.5">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Folders</span>
+                <button
+                  onClick={() => openCreateFolderModal(null)}
+                  className="text-[11px] text-blue-600 hover:underline font-medium"
+                >
+                  + New
+                </button>
               </div>
               {renderFolderTree(null)}
             </div>
@@ -583,14 +668,14 @@ export default function App() {
         </div>
 
         {/* User bar & Logout */}
-        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between">
+        <div className="p-3 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2 truncate">
-            <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-semibold shrink-0">
+            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold shrink-0">
               <User className="w-4 h-4" />
             </div>
             <div className="truncate min-w-0">
               <p className="text-xs font-medium text-slate-800 truncate">{currentUser.email || 'User'}</p>
-              <p className="text-[10px] text-slate-400">Logged In</p>
+              <p className="text-[10px] text-emerald-600 font-medium">Synced</p>
             </div>
           </div>
           <button
@@ -605,32 +690,53 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden">
-        {/* Header Bar */}
+        {/* Top Header Bar with Breadcrumbs */}
         <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
+          <div className="flex items-center justify-between min-w-0">
+            <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto no-scrollbar py-0.5">
               <button
                 onClick={() => setIsMobileSidebarOpen(true)}
-                className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg md:hidden"
+                className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg md:hidden shrink-0"
                 aria-label="Open folder navigation"
               >
                 <Menu className="w-5 h-5" />
               </button>
-              {selectedFolderId === null ? (
-                <Zap className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500 fill-amber-500 shrink-0" />
-              ) : (
-                <FolderOpen className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0" />
-              )}
-              <h2 className="text-sm sm:text-base font-semibold text-slate-800 truncate max-w-[160px] sm:max-w-xs">
-                {selectedFolderId
-                  ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
-                  : 'Instant Links'}
-              </h2>
-              <span className="text-[11px] bg-slate-100 text-slate-500 font-medium px-2 py-0.5 rounded-full">
-                {filteredLinks.length}
-              </span>
+
+              {/* Root Breadcrumb */}
+              <button
+                onClick={() => handleSelectFolder(null)}
+                className={`flex items-center space-x-1.5 text-xs sm:text-sm px-2 py-1 rounded-md transition shrink-0 ${
+                  selectedFolderId === null
+                    ? 'font-semibold text-slate-800 bg-slate-100/80'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                <span>Instant Links</span>
+              </button>
+
+              {/* Dynamic Folder Path Breadcrumbs */}
+              {breadcrumbs.map((crumb, idx) => {
+                const isLast = idx === breadcrumbs.length - 1;
+                return (
+                  <React.Fragment key={crumb.id}>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                    <button
+                      onClick={() => handleSelectFolder(crumb.id)}
+                      className={`text-xs sm:text-sm px-2 py-1 rounded-md truncate max-w-[120px] sm:max-w-[180px] transition ${
+                        isLast
+                          ? 'font-semibold text-slate-800 bg-blue-50/70 text-blue-700'
+                          : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                      }`}
+                    >
+                      {crumb.name}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
             </div>
 
+            {/* Mobile Quick Action Button */}
             <button
               onClick={() => {
                 setEditingLink(null);
@@ -639,24 +745,38 @@ export default function App() {
                 setLinkTags('');
                 setIsLinkModalOpen(true);
               }}
-              className="flex items-center space-x-1 sm:space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg transition shadow-xs shrink-0 sm:hidden"
+              className="flex items-center space-x-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg transition shadow-xs shrink-0 sm:hidden ml-2"
             >
               <Plus className="w-4 h-4" />
               <span>Add</span>
             </button>
           </div>
 
-          <div className="flex items-center space-x-2 w-full sm:auto">
-            <div className="relative flex-1 sm:w-64">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+          {/* Search & Desktop Action Buttons */}
+          <div className="flex items-center space-x-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-56 lg:w-64">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2" />
               <input
                 type="text"
-                placeholder="Search links, tags..."
+                placeholder="Search in view..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
               />
             </div>
+
+            {/* New Subfolder Button (when inside any folder) */}
+            {selectedFolderId !== null && (
+              <button
+                onClick={() => openCreateFolderModal(selectedFolderId)}
+                className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-medium px-3 py-1.5 sm:py-2 rounded-lg transition shrink-0"
+                title="Create Subfolder Here"
+              >
+                <FolderPlus className="w-4 h-4 text-slate-500" />
+                <span className="hidden md:inline">Subfolder</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setEditingLink(null);
@@ -673,123 +793,229 @@ export default function App() {
           </div>
         </header>
 
-        {/* Links Content */}
-        <div className="flex-1 p-3 sm:p-6 overflow-y-auto">
-          {filteredLinks.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-4">
-              <div className="w-14 h-14 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3">
-                <Bookmark className="w-7 h-7" />
-              </div>
-              <h3 className="text-sm font-semibold text-slate-700">No links in this view</h3>
-              <p className="text-xs text-slate-400 max-w-xs mt-1">
-                {selectedFolderId === null
-                  ? 'Add your quick-access instant links right here.'
-                  : 'Save articles, videos, documentation, and tools by clicking Add Link above.'}
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-              {filteredLinks.map(link => {
-                let domain = '';
-                try {
-                  domain = new URL(link.url).hostname;
-                } catch {
-                  domain = link.url;
-                }
-                const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+        {/* Main Workspace Body: Subfolders + Links */}
+        <div className="flex-1 p-3 sm:p-6 overflow-y-auto space-y-6">
 
-                return (
-                  <div
-                    key={link.id}
-                    className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 hover:shadow-md transition flex flex-col justify-between group"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center space-x-2 truncate">
-                          <img
-                            src={favicon}
-                            alt=""
-                            onError={(e) => { e.target.style.display = 'none'; }}
-                            className="w-4 h-4 sm:w-5 sm:h-5 rounded shrink-0"
-                          />
-                          <h4 className="font-semibold text-xs sm:text-sm text-slate-800 truncate" title={link.title}>
-                            {link.title}
-                          </h4>
+          {/* SECTION 1: SUBFOLDERS IN THIS DIRECTORY */}
+          {currentSubfolders.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Folders ({currentSubfolders.length})
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                {currentSubfolders.map(sub => {
+                  const childFolderCount = folders.filter(f => f.parentId === sub.id).length;
+                  const childLinkCount = links.filter(l => l.folderId === sub.id).length;
+
+                  return (
+                    <div
+                      key={sub.id}
+                      onClick={() => handleSelectFolder(sub.id)}
+                      className="group bg-white border border-slate-200/90 hover:border-blue-300 rounded-xl p-3 flex items-center justify-between cursor-pointer hover:shadow-sm transition-all duration-150"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white flex items-center justify-center transition-colors shrink-0">
+                          {sub.name.toLowerCase().includes('youtube') || sub.name.toLowerCase().includes('video') ? (
+                            <Video className="w-4 h-4" />
+                          ) : (
+                            <Folder className="w-4 h-4" />
+                          )}
                         </div>
-                        <button
-                          onClick={() => handleToggleStar(link)}
-                          className={`p-1 rounded shrink-0 ${link.isStarred ? 'text-amber-400' : 'text-slate-300 hover:text-amber-400'}`}
-                        >
-                          <Star className="w-4 h-4 fill-current" />
-                        </button>
+                        <div className="min-w-0">
+                          <h4 className="text-xs sm:text-sm font-semibold text-slate-800 truncate group-hover:text-blue-700 transition-colors">
+                            {sub.name}
+                          </h4>
+                          <p className="text-[11px] text-slate-400">
+                            {childFolderCount > 0 ? `${childFolderCount} folders · ` : ''}
+                            {childLinkCount} {childLinkCount === 1 ? 'link' : 'links'}
+                          </p>
+                        </div>
                       </div>
 
-                      <a
-                        href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] sm:text-xs text-slate-400 hover:text-blue-600 flex items-center space-x-1 mt-1 truncate"
-                      >
-                        <span className="truncate">{link.url}</span>
-                        <ExternalLink className="w-3 h-3 shrink-0" />
-                      </a>
-
-                      {link.tags && link.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2.5">
-                          {link.tags.map(tag => (
-                            <span key={tag} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full flex items-center space-x-1">
-                              <Tag className="w-2.5 h-2.5 text-slate-400" />
-                              <span>{tag}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="border-t border-slate-100 pt-2.5 mt-3 flex items-center justify-between text-xs text-slate-400">
-                      <span className="text-[10px] sm:text-[11px] truncate max-w-[120px]">{domain}</span>
-                      <div className="flex items-center space-x-1 shrink-0">
+                      <div className="flex items-center space-x-0.5 shrink-0 ml-2">
                         <button
-                          title="Copy Link"
-                          onClick={() => handleCopy(link.url, link.id)}
-                          className="p-1.5 hover:bg-slate-100 text-slate-500 rounded transition"
+                          title="Rename Folder"
+                          onClick={(e) => openRenameFolderModal(sub, e)}
+                          className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition"
                         >
-                          {copiedId === link.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          title="Edit Link"
-                          onClick={() => {
-                            setEditingLink(link);
-                            setLinkTitle(link.title);
-                            setLinkUrl(link.url);
-                            setLinkTags(link.tags ? link.tags.join(', ') : '');
-                            setIsLinkModalOpen(true);
-                          }}
-                          className="p-1.5 hover:bg-slate-100 text-slate-500 rounded transition"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          title="Delete Link"
-                          onClick={() => handleDeleteLink(link.id)}
-                          className="p-1.5 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded transition"
+                          title="Delete Folder"
+                          onClick={(e) => promptDeleteFolder(sub, e)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
+
+          {/* SECTION 2: BOOKMARKS / LINKS */}
+          <div>
+            {(currentSubfolders.length > 0 || filteredLinks.length > 0) && (
+              <div className="flex items-center justify-between mb-2.5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Links ({filteredLinks.length})
+                </h3>
+              </div>
+            )}
+
+            {filteredLinks.length === 0 && currentSubfolders.length === 0 ? (
+              <div className="py-16 flex flex-col items-center justify-center text-center p-4 bg-white border border-dashed border-slate-200 rounded-2xl">
+                <div className="w-14 h-14 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3">
+                  <Bookmark className="w-7 h-7" />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-700">This space is empty</h3>
+                <p className="text-xs text-slate-400 max-w-xs mt-1 mb-4">
+                  {selectedFolderId === null
+                    ? 'Save your frequently used instant links here for single-click access.'
+                    : 'Organize this folder by adding links or creating nested subfolders.'}
+                </p>
+                <div className="flex items-center space-x-2">
+                  {selectedFolderId !== null && (
+                    <button
+                      onClick={() => openCreateFolderModal(selectedFolderId)}
+                      className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition flex items-center space-x-1.5"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>New Subfolder</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setEditingLink(null);
+                      setLinkTitle('');
+                      setLinkUrl('');
+                      setLinkTags('');
+                      setIsLinkModalOpen(true);
+                    }}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition flex items-center space-x-1.5 shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Link</span>
+                  </button>
+                </div>
+              </div>
+            ) : filteredLinks.length === 0 ? (
+              <div className="py-8 text-center bg-white/60 border border-dashed border-slate-200 rounded-xl">
+                <p className="text-xs text-slate-400">No direct links in this folder yet.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                {filteredLinks.map(link => {
+                  let domain = '';
+                  try {
+                    domain = new URL(link.url).hostname;
+                  } catch {
+                    domain = link.url;
+                  }
+                  const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+
+                  return (
+                    <div
+                      key={link.id}
+                      className="bg-white border border-slate-200/90 hover:border-slate-300 rounded-xl p-3.5 sm:p-4 hover:shadow-md transition-all duration-150 flex flex-col justify-between group"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center space-x-2.5 truncate group/title"
+                          >
+                            <img
+                              src={favicon}
+                              alt=""
+                              onError={(e) => { e.target.style.display = 'none'; }}
+                              className="w-4 h-4 sm:w-5 sm:h-5 rounded shrink-0"
+                            />
+                            <h4 className="font-semibold text-xs sm:text-sm text-slate-800 group-hover/title:text-blue-600 truncate transition-colors" title={link.title}>
+                              {link.title}
+                            </h4>
+                          </a>
+                          <button
+                            onClick={() => handleToggleStar(link)}
+                            className={`p-1 rounded shrink-0 transition ${link.isStarred ? 'text-amber-400' : 'text-slate-300 hover:text-amber-400'}`}
+                          >
+                            <Star className="w-4 h-4 fill-current" />
+                          </button>
+                        </div>
+
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] sm:text-xs text-slate-400 hover:text-blue-600 flex items-center space-x-1 mt-1.5 truncate transition-colors"
+                        >
+                          <span className="truncate">{link.url}</span>
+                          <ArrowUpRight className="w-3 h-3 shrink-0" />
+                        </a>
+
+                        {link.tags && link.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2.5">
+                            {link.tags.map(tag => (
+                              <span key={tag} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full flex items-center space-x-1">
+                                <Tag className="w-2.5 h-2.5 text-slate-400" />
+                                <span>{tag}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="border-t border-slate-100 pt-2.5 mt-3 flex items-center justify-between text-xs text-slate-400">
+                        <span className="text-[10px] sm:text-[11px] truncate max-w-[130px]">{domain}</span>
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button
+                            title="Copy Link"
+                            onClick={() => handleCopy(link.url, link.id)}
+                            className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-lg transition"
+                          >
+                            {copiedId === link.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            title="Edit Link"
+                            onClick={() => {
+                              setEditingLink(link);
+                              setLinkTitle(link.title);
+                              setLinkUrl(link.url);
+                              setLinkTags(link.tags ? link.tags.join(', ') : '');
+                              setIsLinkModalOpen(true);
+                            }}
+                            className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-lg transition"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            title="Delete Link"
+                            onClick={() => handleDeleteLink(link.id)}
+                            className="p-1.5 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded-lg transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </main>
 
       {/* CUSTOM CONFIRMATION POPUP FOR FOLDER DELETION */}
       {folderToDelete && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 border border-slate-100">
             <div className="flex items-start space-x-3.5">
               <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5" />
@@ -834,36 +1060,43 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: ADD FOLDER */}
+      {/* MODAL: CREATE / RENAME FOLDER */}
       {isFolderModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-4 sm:p-5 border border-slate-100">
             <h3 className="font-semibold text-slate-800 text-sm mb-3">
-              {parentFolderId ? 'Create Subfolder' : 'Create Folder'}
+              {editingFolder
+                ? 'Rename Folder'
+                : parentFolderId
+                  ? 'Create Subfolder'
+                  : 'Create Folder'}
             </h3>
-            <form onSubmit={handleCreateFolder} className="space-y-3">
+            <form onSubmit={handleSaveFolder} className="space-y-3">
               <input
                 type="text"
                 required
                 placeholder="Folder name..."
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                value={folderNameInput}
+                onChange={(e) => setFolderNameInput(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                 autoFocus
               />
               <div className="flex justify-end space-x-2">
                 <button
                   type="button"
-                  onClick={() => setIsFolderModalOpen(false)}
+                  onClick={() => {
+                    setIsFolderModalOpen(false);
+                    setEditingFolder(null);
+                  }}
                   className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-3.5 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm"
+                  className="px-3.5 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs"
                 >
-                  Create
+                  {editingFolder ? 'Save' : 'Create'}
                 </button>
               </div>
             </form>
@@ -887,7 +1120,7 @@ export default function App() {
                   placeholder="e.g., GitHub, React Documentation"
                   value={linkTitle}
                   onChange={(e) => setLinkTitle(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                   autoFocus
                 />
               </div>
@@ -900,7 +1133,7 @@ export default function App() {
                   placeholder="https://example.com"
                   value={linkUrl}
                   onChange={(e) => setLinkUrl(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                 />
               </div>
 
@@ -911,7 +1144,7 @@ export default function App() {
                   placeholder="dev, video, tutorial"
                   value={linkTags}
                   onChange={(e) => setLinkTags(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                 />
               </div>
 
@@ -925,7 +1158,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm"
+                  className="px-4 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs"
                 >
                   {editingLink ? 'Save Changes' : 'Add Link'}
                 </button>
