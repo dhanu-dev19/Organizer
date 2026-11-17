@@ -7,15 +7,21 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
-  build:{
-    rollupOptions:{
-     output: {
-        manualChunks: {
-          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-          icons: ['lucide-react']
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('firebase')) {
+              return 'firebase';
+            }
+            if (id.includes('lucide-react')) {
+              return 'icons';
+            }
+          }
         }
       }
-  }
+    }
   }
 
 })
