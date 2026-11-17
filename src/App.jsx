@@ -81,6 +81,7 @@ export default function App() {
   // Core App states
   const [folders, setFolders] = useState([]);
   const [links, setLinks] = useState([]);
+  // selectedFolderId can be: null ("Instant Links"), "favorites" ("Favorites"), or a folder document ID
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -202,6 +203,7 @@ export default function App() {
 
   // Build Breadcrumb Trail for current folder
   const breadcrumbs = useMemo(() => {
+    if (!selectedFolderId || selectedFolderId === 'favorites') return [];
     const trail = [];
     let currentId = selectedFolderId;
     const visited = new Set();
@@ -224,7 +226,7 @@ export default function App() {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
 
-    if (folderId) {
+    if (folderId && folderId !== 'favorites') {
       const toExpand = {};
       let curr = folders.find(f => f.id === folderId);
       while (curr && curr.parentId) {
@@ -238,7 +240,7 @@ export default function App() {
   // Open Create or Rename Folder Modal
   const openCreateFolderModal = (parentId = null) => {
     setEditingFolder(null);
-    setParentFolderId(parentId);
+    setParentFolderId(parentId === 'favorites' ? null : parentId);
     setFolderNameInput('');
     setIsFolderModalOpen(true);
   };
@@ -347,13 +349,14 @@ export default function App() {
         updatedAt: serverTimestamp()
       });
     } else {
+      const isFavoritesView = selectedFolderId === 'favorites';
       await addDoc(collection(db, 'links'), {
         title: linkTitle.trim(),
         url: formattedUrl,
         tags: tagsArray,
-        folderId: selectedFolderId,
+        folderId: isFavoritesView ? null : selectedFolderId,
         userId: currentUser.uid,
-        isStarred: false,
+        isStarred: isFavoritesView,
         createdAt: serverTimestamp()
       });
     }
@@ -382,9 +385,14 @@ export default function App() {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
+  // Total starred count for Favorites badge
+  const starredCount = useMemo(() => {
+    return links.filter(l => l.isStarred).length;
+  }, [links]);
+
   // Subfolders inside the currently selected folder
   const currentSubfolders = useMemo(() => {
-    if (selectedFolderId === null) return [];
+    if (selectedFolderId === null || selectedFolderId === 'favorites') return [];
     return folders.filter(f => {
       const matchesParent = f.parentId === selectedFolderId;
       const matchesSearch = searchQuery === '' || f.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -392,19 +400,24 @@ export default function App() {
     });
   }, [folders, selectedFolderId, searchQuery]);
 
-  // Links inside the currently selected folder
+  // Links inside the currently selected view ("Instant Links", "Favorites", or specific folder)
   const filteredLinks = useMemo(() => {
     return links.filter(link => {
-      const matchesFolder = selectedFolderId === null
-        ? (!link.folderId || link.folderId === null)
-        : link.folderId === selectedFolderId;
+      let matchesView = false;
+      if (selectedFolderId === 'favorites') {
+        matchesView = Boolean(link.isStarred);
+      } else if (selectedFolderId === null) {
+        matchesView = !link.folderId || link.folderId === null;
+      } else {
+        matchesView = link.folderId === selectedFolderId;
+      }
 
       const matchesSearch = searchQuery === '' ||
         link.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         link.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (link.tags && link.tags.some(t => t.includes(searchQuery.toLowerCase())));
 
-      return matchesFolder && matchesSearch;
+      return matchesView && matchesSearch;
     });
   }, [links, selectedFolderId, searchQuery]);
 
@@ -596,6 +609,8 @@ export default function App() {
     );
   }
 
+  const isFolderView = selectedFolderId !== null && selectedFolderId !== 'favorites';
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-800 antialiased overflow-hidden relative">
 
@@ -641,22 +656,45 @@ export default function App() {
 
           {/* Navigation & Folders list */}
           <div className="p-3 space-y-4 overflow-y-auto flex-1">
-            <button
-              onClick={() => handleSelectFolder(null)}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
-                selectedFolderId === null
-                  ? 'bg-amber-50 text-amber-800 font-semibold shadow-2xs'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <div className="flex items-center space-x-2.5">
-                <Zap className={`w-4 h-4 ${selectedFolderId === null ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
-                <span>Instant Links</span>
-              </div>
-              <span className="text-[11px] text-slate-400 font-medium">
-                {links.filter(l => !l.folderId).length}
-              </span>
-            </button>
+            <div className="space-y-1">
+              {/* Instant Links (Root links) */}
+              <button
+                onClick={() => handleSelectFolder(null)}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                  selectedFolderId === null
+                    ? 'bg-blue-50 text-blue-700 font-semibold shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5">
+                  <Zap className={`w-4 h-4 ${selectedFolderId === null ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} />
+                  <span>Instant Links</span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {links.filter(l => !l.folderId).length}
+                </span>
+              </button>
+
+              {/* Favorites Section */}
+              <button
+                onClick={() => handleSelectFolder('favorites')}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${
+                  selectedFolderId === 'favorites'
+                    ? 'bg-amber-50 text-amber-800 font-semibold shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5">
+                  <Star className={`w-4 h-4 ${selectedFolderId === 'favorites' ? 'text-amber-500 fill-amber-500' : 'text-amber-400'}`} />
+                  <span>Favorites</span>
+                </div>
+                <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
+                  selectedFolderId === 'favorites' ? 'bg-amber-100 text-amber-800' : 'text-slate-400'
+                }`}>
+                  {starredCount}
+                </span>
+              </button>
+            </div>
 
             <div>
               <div className="flex items-center justify-between px-3 mb-1.5">
@@ -708,38 +746,47 @@ export default function App() {
                 <Menu className="w-5 h-5" />
               </button>
 
-              {/* Root Breadcrumb */}
-              <button
-                onClick={() => handleSelectFolder(null)}
-                className={`flex items-center space-x-1.5 text-xs sm:text-sm px-2 py-1 rounded-md transition shrink-0 ${
-                  selectedFolderId === null
-                    ? 'font-semibold text-slate-800 bg-slate-100/80'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-                }`}
-              >
-                <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                <span>Instant Links</span>
-              </button>
+              {selectedFolderId === 'favorites' ? (
+                <div className="flex items-center space-x-1.5 text-xs sm:text-sm px-2.5 py-1 rounded-md font-semibold text-amber-800 bg-amber-50/90 shrink-0">
+                  <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                  <span>Favorites</span>
+                </div>
+              ) : (
+                <>
+                  {/* Root Breadcrumb */}
+                  <button
+                    onClick={() => handleSelectFolder(null)}
+                    className={`flex items-center space-x-1.5 text-xs sm:text-sm px-2 py-1 rounded-md transition shrink-0 ${
+                      selectedFolderId === null
+                        ? 'font-semibold text-blue-700 bg-blue-50/80'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Zap className="w-3.5 h-3.5 text-blue-600 fill-blue-600" />
+                    <span>Instant Links</span>
+                  </button>
 
-              {/* Dynamic Folder Path Breadcrumbs */}
-              {breadcrumbs.map((crumb, idx) => {
-                const isLast = idx === breadcrumbs.length - 1;
-                return (
-                  <React.Fragment key={crumb.id}>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-                    <button
-                      onClick={() => handleSelectFolder(crumb.id)}
-                      className={`text-xs sm:text-sm px-2 py-1 rounded-md truncate max-w-[120px] sm:max-w-[180px] transition ${
-                        isLast
-                          ? 'font-semibold bg-blue-50/70 text-blue-700'
-                          : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-                      }`}
-                    >
-                      {crumb.name}
-                    </button>
-                  </React.Fragment>
-                );
-              })}
+                  {/* Dynamic Folder Path Breadcrumbs */}
+                  {breadcrumbs.map((crumb, idx) => {
+                    const isLast = idx === breadcrumbs.length - 1;
+                    return (
+                      <React.Fragment key={crumb.id}>
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                        <button
+                          onClick={() => handleSelectFolder(crumb.id)}
+                          className={`text-xs sm:text-sm px-2 py-1 rounded-md truncate max-w-[120px] sm:max-w-[180px] transition ${
+                            isLast
+                              ? 'font-semibold bg-blue-50/70 text-blue-700'
+                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                          }`}
+                        >
+                          {crumb.name}
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+                </>
+              )}
             </div>
 
             {/* Mobile Quick Action Button */}
@@ -772,7 +819,7 @@ export default function App() {
             </div>
 
             {/* New Subfolder Button (when inside any folder) */}
-            {selectedFolderId !== null && (
+            {isFolderView && (
               <button
                 onClick={() => openCreateFolderModal(selectedFolderId)}
                 className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-medium px-3 py-1.5 sm:py-2 rounded-lg transition shrink-0"
@@ -868,24 +915,30 @@ export default function App() {
             {(currentSubfolders.length > 0 || filteredLinks.length > 0) && (
               <div className="flex items-center justify-between mb-2.5">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Links ({filteredLinks.length})
+                  {selectedFolderId === 'favorites' ? `Starred Bookmarks (${filteredLinks.length})` : `Links (${filteredLinks.length})`}
                 </h3>
               </div>
             )}
 
             {filteredLinks.length === 0 && currentSubfolders.length === 0 ? (
               <div className="py-16 flex flex-col items-center justify-center text-center p-4 bg-white border border-dashed border-slate-200 rounded-2xl">
-                <div className="w-14 h-14 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3">
-                  <Bookmark className="w-7 h-7" />
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3 ${
+                  selectedFolderId === 'favorites' ? 'bg-amber-50 text-amber-500' : 'bg-blue-50 text-blue-500'
+                }`}>
+                  {selectedFolderId === 'favorites' ? <Star className="w-7 h-7" /> : <Bookmark className="w-7 h-7" />}
                 </div>
-                <h3 className="text-sm font-semibold text-slate-700">This space is empty</h3>
+                <h3 className="text-sm font-semibold text-slate-700">
+                  {selectedFolderId === 'favorites' ? 'No favorite links yet' : 'This space is empty'}
+                </h3>
                 <p className="text-xs text-slate-400 max-w-xs mt-1 mb-4">
-                  {selectedFolderId === null
-                    ? 'Save your frequently used instant links here for single-click access.'
-                    : 'Organize this folder by adding links or creating nested subfolders.'}
+                  {selectedFolderId === 'favorites'
+                    ? 'Click the star icon on any link across your folders to pin it here for quick access.'
+                    : selectedFolderId === null
+                      ? 'Save your frequently used instant links here for single-click access.'
+                      : 'Organize this folder by adding links or creating nested subfolders.'}
                 </p>
                 <div className="flex items-center space-x-2">
-                  {selectedFolderId !== null && (
+                  {isFolderView && (
                     <button
                       onClick={() => openCreateFolderModal(selectedFolderId)}
                       className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition flex items-center space-x-1.5"
@@ -905,7 +958,7 @@ export default function App() {
                     className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition flex items-center space-x-1.5 shadow-xs"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Add Link</span>
+                    <span>{selectedFolderId === 'favorites' ? 'Add Favorite Link' : 'Add Link'}</span>
                   </button>
                 </div>
               </div>
@@ -923,6 +976,7 @@ export default function App() {
                     domain = link.url;
                   }
                   const favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+                  const sourceFolder = link.folderId ? folders.find(f => f.id === link.folderId) : null;
 
                   return (
                     <div
@@ -948,8 +1002,9 @@ export default function App() {
                             </h4>
                           </a>
                           <button
+                            title={link.isStarred ? "Remove from Favorites" : "Add to Favorites"}
                             onClick={() => handleToggleStar(link)}
-                            className={`p-1 rounded shrink-0 transition ${link.isStarred ? 'text-amber-400' : 'text-slate-300 hover:text-amber-400'}`}
+                            className={`p-1 rounded shrink-0 transition active:scale-90 ${link.isStarred ? 'text-amber-400' : 'text-slate-300 hover:text-amber-400'}`}
                           >
                             <Star className="w-4 h-4 fill-current" />
                           </button>
@@ -964,6 +1019,29 @@ export default function App() {
                           <span className="truncate">{link.url}</span>
                           <ArrowUpRight className="w-3 h-3 shrink-0" />
                         </a>
+
+                        {/* Show source folder badge when viewing Favorites */}
+                        {selectedFolderId === 'favorites' && (
+                          <div className="mt-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectFolder(sourceFolder ? sourceFolder.id : null)}
+                              className="inline-flex items-center space-x-1 text-[10px] font-medium text-slate-500 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 px-2 py-0.5 rounded transition"
+                            >
+                              {sourceFolder ? (
+                                <>
+                                  <Folder className="w-2.5 h-2.5" />
+                                  <span>{sourceFolder.name}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Zap className="w-2.5 h-2.5 text-blue-500" />
+                                  <span>Instant Links</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
 
                         {link.tags && link.tags.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-2.5">
@@ -1128,7 +1206,11 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-4 sm:p-5 border border-slate-100">
             <h3 className="font-semibold text-slate-800 text-sm mb-3">
-              {editingLink ? 'Edit Bookmark' : 'Add New Bookmark'}
+              {editingLink
+                ? 'Edit Bookmark'
+                : selectedFolderId === 'favorites'
+                  ? 'Add Favorite Bookmark'
+                  : 'Add New Bookmark'}
             </h3>
             <form onSubmit={handleSaveLink} className="space-y-3">
               <div>
