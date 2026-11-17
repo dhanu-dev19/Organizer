@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Folder,
   FolderPlus,
-  ExternalLink,
   Trash2,
   Edit3,
   Search,
@@ -100,8 +99,8 @@ export default function App() {
   const [linkUrl, setLinkUrl] = useState('');
   const [linkTags, setLinkTags] = useState('');
 
-  // Custom Confirmation Modal State
-  const [folderToDelete, setFolderToDelete] = useState(null);
+  // Unified Custom Confirmation Modal State: { type: 'folder' | 'link', item: Object }
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Track authentication state
@@ -279,7 +278,7 @@ export default function App() {
     setIsFolderModalOpen(false);
   };
 
-  // Recursive deletion helper
+  // Recursive folder deletion helper
   const deleteFolderRecursive = async (folderId) => {
     const childFolders = folders.filter(f => f.parentId === folderId);
     for (const child of childFolders) {
@@ -294,25 +293,37 @@ export default function App() {
     await deleteDoc(doc(db, 'folders', folderId));
   };
 
+  // Prompt confirmation popup for folders
   const promptDeleteFolder = (folder, e) => {
     e.stopPropagation();
-    setFolderToDelete(folder);
+    setDeleteTarget({ type: 'folder', item: folder });
   };
 
-  const confirmDeleteFolder = async () => {
-    if (!folderToDelete) return;
+  // Prompt confirmation popup for links
+  const promptDeleteLink = (link, e) => {
+    if (e) e.stopPropagation();
+    setDeleteTarget({ type: 'link', item: link });
+  };
+
+  // Execute confirmed deletion for either folder or link
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
     setIsDeleting(true);
 
     try {
-      await deleteFolderRecursive(folderToDelete.id);
-      if (selectedFolderId === folderToDelete.id) {
-        setSelectedFolderId(folderToDelete.parentId || null);
+      if (deleteTarget.type === 'folder') {
+        await deleteFolderRecursive(deleteTarget.item.id);
+        if (selectedFolderId === deleteTarget.item.id) {
+          setSelectedFolderId(deleteTarget.item.parentId || null);
+        }
+      } else if (deleteTarget.type === 'link') {
+        await deleteDoc(doc(db, 'links', deleteTarget.item.id));
       }
     } catch (error) {
-      console.error("Error deleting folder:", error);
+      console.error(`Error deleting ${deleteTarget.type}:`, error);
     } finally {
       setIsDeleting(false);
-      setFolderToDelete(null);
+      setDeleteTarget(null);
     }
   };
 
@@ -354,10 +365,6 @@ export default function App() {
     setIsLinkModalOpen(false);
   };
 
-  const handleDeleteLink = async (linkId) => {
-    await deleteDoc(doc(db, 'links', linkId));
-  };
-
   const handleToggleStar = async (link) => {
     await updateDoc(doc(db, 'links', link.id), {
       isStarred: !link.isStarred
@@ -375,8 +382,7 @@ export default function App() {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
-  // Subfolders inside the currently selected folder (shown in main body)
-  // Note: When selectedFolderId === null ("Instant Links"), we only show root links, keeping root folders in the sidebar.
+  // Subfolders inside the currently selected folder
   const currentSubfolders = useMemo(() => {
     if (selectedFolderId === null) return [];
     return folders.filter(f => {
@@ -386,7 +392,7 @@ export default function App() {
     });
   }, [folders, selectedFolderId, searchQuery]);
 
-  // Links inside the currently selected folder (or root links if selectedFolderId === null)
+  // Links inside the currently selected folder
   const filteredLinks = useMemo(() => {
     return links.filter(link => {
       const matchesFolder = selectedFolderId === null
@@ -725,7 +731,7 @@ export default function App() {
                       onClick={() => handleSelectFolder(crumb.id)}
                       className={`text-xs sm:text-sm px-2 py-1 rounded-md truncate max-w-[120px] sm:max-w-[180px] transition ${
                         isLast
-                          ? 'font-semibold text-slate-800 bg-blue-50/70 text-blue-700'
+                          ? 'font-semibold bg-blue-50/70 text-blue-700'
                           : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
                       }`}
                     >
@@ -996,7 +1002,7 @@ export default function App() {
                           </button>
                           <button
                             title="Delete Link"
-                            onClick={() => handleDeleteLink(link.id)}
+                            onClick={(e) => promptDeleteLink(link, e)}
                             className="p-1.5 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded-lg transition"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1012,22 +1018,35 @@ export default function App() {
         </div>
       </main>
 
-      {/* CUSTOM CONFIRMATION POPUP FOR FOLDER DELETION */}
-      {folderToDelete && (
+      {/* UNIFIED CUSTOM CONFIRMATION MODAL FOR FOLDERS & LINKS */}
+      {deleteTarget && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 border border-slate-100">
             <div className="flex items-start space-x-3.5">
               <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5" />
               </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-slate-800 text-sm">Delete Folder</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Are you sure you want to delete <span className="font-semibold text-slate-700">"{folderToDelete.name}"</span>?
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-slate-800 text-sm">
+                  {deleteTarget.type === 'folder' ? 'Delete Folder' : 'Delete Link'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 break-words">
+                  Are you sure you want to delete{' '}
+                  <span className="font-semibold text-slate-700">
+                    "{deleteTarget.type === 'folder' ? deleteTarget.item.name : deleteTarget.item.title}"
+                  </span>
+                  ?
                 </p>
-                <p className="text-[11px] text-red-500 mt-1 font-medium">
-                  This action cannot be undone and will delete all subfolders and links inside it.
-                </p>
+
+                {deleteTarget.type === 'folder' ? (
+                  <p className="text-[11px] text-red-500 mt-1.5 font-medium">
+                    This action cannot be undone and will permanently delete all subfolders and links inside it.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-slate-400 mt-1.5 truncate bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                    {deleteTarget.item.url}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1035,7 +1054,7 @@ export default function App() {
               <button
                 type="button"
                 disabled={isDeleting}
-                onClick={() => setFolderToDelete(null)}
+                onClick={() => setDeleteTarget(null)}
                 className="px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition"
               >
                 Cancel
@@ -1043,7 +1062,7 @@ export default function App() {
               <button
                 type="button"
                 disabled={isDeleting}
-                onClick={confirmDeleteFolder}
+                onClick={handleConfirmDelete}
                 className="px-4 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-xs transition flex items-center space-x-1.5"
               >
                 {isDeleting ? (
@@ -1052,7 +1071,7 @@ export default function App() {
                     <span>Deleting...</span>
                   </>
                 ) : (
-                  <span>Delete Folder</span>
+                  <span>{deleteTarget.type === 'folder' ? 'Delete Folder' : 'Delete Link'}</span>
                 )}
               </button>
             </div>
