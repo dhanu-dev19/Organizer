@@ -2,10 +2,10 @@ import React from 'react';
 import {
   Bookmark, FolderPlus, X, Zap, Star, User, LogOut,
   ChevronDown, ChevronRight, Video, FolderOpen, Folder,
-  Plus, Pencil, Trash2
+  Plus, Pencil, Trash2, Lock, Unlock
 } from 'lucide-react';
 
-const Sidebar = React.memo( function Sidebar({
+const Sidebar = React.memo(function Sidebar({
   currentUser,
   isOpen,
   onClose,
@@ -15,12 +15,29 @@ const Sidebar = React.memo( function Sidebar({
   onSelectFolder,
   expandedFolders,
   onToggleExpand,
+  unlockedFolderIds,
+  onOpenLockModal,
+  onLockNow,
   onOpenCreateFolder,
   onOpenRenameFolder,
   onPromptDeleteFolder,
   onLogout
 }) {
-  const starredCount = links.filter(l => l.isStarred).length;
+  // Hide starred links that belong to currently locked folders
+  const isFolderAccessible = (folderId) => {
+    let currId = folderId;
+    const visited = new Set();
+    while (currId && !visited.has(currId)) {
+      visited.add(currId);
+      const folder = folders.find(f => f.id === currId);
+      if (!folder) break;
+      if (folder.isLocked && !unlockedFolderIds[folder.id]) return false;
+      currId = folder.parentId;
+    }
+    return true;
+  };
+
+  const starredCount = links.filter(l => l.isStarred && (!l.folderId || isFolderAccessible(l.folderId))).length;
   const instantCount = links.filter(l => !l.folderId).length;
 
   const renderFolderTree = (parentId = null, depth = 0) => {
@@ -31,7 +48,10 @@ const Sidebar = React.memo( function Sidebar({
       <div className={`space-y-0.5 ${depth > 0 ? 'ml-3 border-l border-slate-200/80 pl-2 mt-0.5' : ''}`}>
         {currentLevelFolders.map(folder => {
           const hasChildren = folders.some(f => f.parentId === folder.id);
-          const isExpanded = !!expandedFolders[folder.id];
+          const isLocked = Boolean(folder.isLocked);
+          const isUnlocked = Boolean(unlockedFolderIds[folder.id]);
+          const isProtected = isLocked && !isUnlocked;
+          const isExpanded = !isProtected && Boolean(expandedFolders[folder.id]);
           const isSelected = selectedFolderId === folder.id;
 
           return (
@@ -48,7 +68,14 @@ const Sidebar = React.memo( function Sidebar({
                   {hasChildren ? (
                     <button
                       type="button"
-                      onClick={(e) => onToggleExpand(folder.id, e)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isProtected) {
+                          onSelectFolder(folder.id); // Prompts PIN modal first
+                        } else {
+                          onToggleExpand(folder.id, e);
+                        }
+                      }}
                       className="p-0.5 hover:bg-slate-200/80 rounded shrink-0 transition-transform"
                     >
                       {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -56,7 +83,12 @@ const Sidebar = React.memo( function Sidebar({
                   ) : (
                     <span className="w-4 shrink-0" />
                   )}
-                  {folder.name.toLowerCase().includes('youtube') || folder.name.toLowerCase().includes('video') ? (
+
+                  {isProtected ? (
+                    <Lock className="w-4 h-4 text-amber-500 shrink-0" />
+                  ) : isLocked && isUnlocked ? (
+                    <Unlock className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : folder.name.toLowerCase().includes('youtube') || folder.name.toLowerCase().includes('video') ? (
                     <Video className="w-4 h-4 text-red-500 shrink-0" />
                   ) : isSelected ? (
                     <FolderOpen className="w-4 h-4 text-blue-600 shrink-0" />
@@ -66,26 +98,50 @@ const Sidebar = React.memo( function Sidebar({
                   <span className="truncate">{folder.name}</span>
                 </div>
 
+                {/* Folder Actions */}
                 <div className="flex items-center space-x-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0">
+                  {!isProtected && (
+                    <button
+                      type="button"
+                      title="Add Subfolder"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenCreateFolder(folder.id);
+                      }}
+                      className="p-1 hover:text-blue-600 hover:bg-blue-100/70 active:scale-95 rounded text-slate-400 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+
+                  {/* Lock / Remove Lock Toggle */}
                   <button
                     type="button"
-                    title="Add Subfolder"
+                    title={isLocked ? 'Remove 6-Digit Lock' : 'Set 6-Digit Lock'}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpenCreateFolder(folder.id);
+                      onOpenLockModal(isLocked ? 'remove' : 'set', folder);
                     }}
-                    className="p-1 hover:text-blue-600 hover:bg-blue-100/70 active:scale-95 rounded text-slate-400 transition"
+                    className={`p-1 active:scale-95 rounded transition ${
+                      isLocked
+                        ? 'text-amber-500 hover:bg-amber-100/70'
+                        : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                    }`}
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Lock className="w-3 h-3" />
                   </button>
-                  <button
-                    type="button"
-                    title="Rename Folder"
-                    onClick={(e) => onOpenRenameFolder(folder, e)}
-                    className="p-1 hover:text-slate-700 hover:bg-slate-200/70 active:scale-95 rounded text-slate-400 transition"
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </button>
+
+                  {!isProtected && (
+                    <button
+                      type="button"
+                      title="Rename Folder"
+                      onClick={(e) => onOpenRenameFolder(folder, e)}
+                      className="p-1 hover:text-slate-700 hover:bg-slate-200/70 active:scale-95 rounded text-slate-400 transition"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     title="Delete Folder"
@@ -105,6 +161,8 @@ const Sidebar = React.memo( function Sidebar({
     );
   };
 
+  const hasAnyUnlockedFolders = Object.keys(unlockedFolderIds).length > 0;
+
   return (
     <>
       {isOpen && (
@@ -120,7 +178,6 @@ const Sidebar = React.memo( function Sidebar({
         }`}
       >
         <div className="flex flex-col flex-1 min-h-0">
-          {/* Brand header */}
           <div className="p-4 border-b border-slate-100 flex items-center justify-between shrink-0">
             <div className="flex items-center space-x-2.5">
               <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs">
@@ -145,7 +202,6 @@ const Sidebar = React.memo( function Sidebar({
             </div>
           </div>
 
-          {/* Navigation & Folders list */}
           <div className="p-3 space-y-4 overflow-y-auto flex-1">
             <div className="space-y-1">
               <button
@@ -186,19 +242,30 @@ const Sidebar = React.memo( function Sidebar({
             <div>
               <div className="flex items-center justify-between px-3 mb-1.5">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Folders</span>
-                <button
-                  onClick={() => onOpenCreateFolder(null)}
-                  className="text-[11px] text-blue-600 hover:underline font-medium"
-                >
-                  + New
-                </button>
+                <div className="flex items-center space-x-2">
+                  {hasAnyUnlockedFolders && (
+                    <button
+                      onClick={onLockNow}
+                      title="Re-lock all unlocked folders"
+                      className="text-[11px] text-amber-600 hover:underline font-medium flex items-center space-x-0.5"
+                    >
+                      <Lock className="w-2.5 h-2.5" />
+                      <span>Lock All</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onOpenCreateFolder(null)}
+                    className="text-[11px] text-blue-600 hover:underline font-medium"
+                  >
+                    + New
+                  </button>
+                </div>
               </div>
               {renderFolderTree(null)}
             </div>
           </div>
         </div>
 
-        {/* User bar & Logout */}
         <div className="p-3 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2 truncate">
             <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold shrink-0">

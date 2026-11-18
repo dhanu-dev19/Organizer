@@ -4,22 +4,21 @@ import {
   collection, query, where, onSnapshot, addDoc,
   deleteDoc, updateDoc, doc, serverTimestamp
 } from 'firebase/firestore';
-import AuthScreen from './components/AuthScreen';
 import { auth, db } from './firebase';
 
+import AuthScreen from './components/AuthScreen';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import FolderGrid from './components/FolderGrid';
 import LinkGrid from './components/LinkGrid';
 
-// const AuthScreen = lazy(() => import('./components/AuthScreen'));
 const DeleteConfirmModal = lazy(() => import('./components/Modals').then(m => ({ default: m.DeleteConfirmModal })));
 const FolderModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderModal })));
 const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));
+const FolderLockModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderLockModal })));
 
-// Safely extracts milliseconds from Firestore Timestamp, Date, or numeric value
 const getTimestampMs = (ts) => {
-  if (!ts) return Date.now(); // Optimistic fallback for newly created items awaiting serverTimestamp
+  if (!ts) return Date.now();
   if (typeof ts.toMillis === 'function') return ts.toMillis();
   if (ts.seconds) return ts.seconds * 1000;
   return new Date(ts).getTime() || 0;
@@ -36,11 +35,16 @@ export default function App() {
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
 
-  // Search, Sort & Date Filter States (Default: Newest first)
+  // Locker States (Session-only: clears on refresh or logout)
+  const [unlockedFolderIds, setUnlockedFolderIds] = useState({});
+  const [lockModalState, setLockModalState] = useState(null); // { mode: 'unlock' | 'set' | 'remove', folder }
+  const [pendingFolderIdAfterUnlock, setPendingFolderIdAfterUnlock] = useState(null);
+
+  // Search, Sort & Date Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'oldest' | 'modified'
-  const [dateFilter, setDateFilter] = useState('all'); // 'all' | 'today' | 'week' | 'month'
+  const [sortBy, setSortBy] = useState('newest');
+  const [dateFilter, setDateFilter] = useState('all');
 
   // Modal States
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -53,7 +57,6 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Debounce search query by 200ms
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchQuery.trim().toLowerCase()), 200);
     return () => clearTimeout(timer);
@@ -68,6 +71,7 @@ export default function App() {
         setFolders([]);
         setLinks([]);
         setSelectedFolderId(null);
+        setUnlockedFolderIds({});
       }
     });
     return () => unsubscribe();
@@ -127,24 +131,102 @@ export default function App() {
     return trail;
   }, [selectedFolderId, folders]);
 
-  // Stable Callbacks
-  const handleSelectFolder = useCallback((folderId) => {
+  // Helper to expand parent folders and navigate
+  const navigateToFolder = useCallback((folderId, allFoldersList) => {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
 
     if (folderId && folderId !== 'favorites') {
-      setFolders(currentFolders => {
-        const toExpand = {};
-        let curr = currentFolders.find(f => f.id === folderId);
-        while (curr && curr.parentId) {
-          toExpand[curr.parentId] = true;
-          curr = currentFolders.find(f => f.id === curr.parentId);
-        }
-        setExpandedFolders(prev => ({ ...prev, ...toExpand, [folderId]: true }));
-        return currentFolders;
-      });
+      const toExpand = {};
+      let curr = allFoldersList.find(f => f.id === folderId);
+      while (curr && curr.parentId) {
+        toExpand[curr.parentId] = true;
+        curr = allFoldersList.find(f => f.id === curr.parentId);
+      }
+      setExpandedFolders(prev => ({ ...prev, ...toExpand, [folderId]: true }));
     }
   }, []);
+
+  // Intercept folder selection if the folder (or an ancestor) is locked
+  const handleSelectFolder = useCallback((folderId) => {
+    if (!folderId || folderId === 'favorites') {
+      navigateToFolder(folderId, folders);
+      return;
+    }
+
+    // Check from outermost ancestor down to target folder for the first locked & un-unlocked folder
+    const chain = [];
+    let curr = folders.find(f => f.id === folderId);
+    const visited = new Set();
+    while (curr && !visited.has(curr.id)) {
+      visited.add(curr.id);
+      chain.unshift(curr);
+      curr = curr.parentId ? folders.find(f => f.id === curr.parentId) : null;
+    }
+
+    const lockedBlocker = chain.find(f => f.isLocked && !unlockedFolderIds[f.id]);
+    if (lockedBlocker) {
+      setPendingFolderIdAfterUnlock(folderId);
+      setLockModalState({ mode: 'unlock', folder: lockedBlocker });
+      return;
+    }
+
+    navigateToFolder(folderId, folders);
+  }, [folders, unlockedFolderIds, navigateToFolder]);
+
+  // Locker Callbacks
+  const handleOpenLockModal = useCallback((mode, folder) => {
+    setPendingFolderIdAfterUnlock(null);
+    setLockModalState({ mode, folder });
+  }, []);
+
+  const handleUnlockSuccess = useCallback((unlockedId) => {
+    setUnlockedFolderIds(prev => ({ ...prev, [unlockedId]: true }));
+    const targetId = pendingFolderIdAfterUnlock || unlockedId;
+    setPendingFolderIdAfterUnlock(null);
+    navigateToFolder(targetId, folders);
+  }, [pendingFolderIdAfterUnlock, folders, navigateToFolder]);
+
+  const handleSetFolderPin = async (folderId, pinHash) => {
+    await updateDoc(doc(db, 'folders', folderId), {
+      isLocked: true,
+      pinHash,
+      updatedAt: serverTimestamp()
+    });
+    // Lock immediately in session and collapse it in sidebar
+    setUnlockedFolderIds(prev => {
+      const copy = { ...prev };
+      delete copy[folderId];
+      return copy;
+    });
+    setExpandedFolders(prev => ({ ...prev, [folderId]: false }));
+    if (selectedFolderId === folderId) {
+      const folder = folders.find(f => f.id === folderId);
+      setSelectedFolderId(folder?.parentId || null);
+    }
+  };
+
+  const handleRemoveFolderPin = async (folderId) => {
+    await updateDoc(doc(db, 'folders', folderId), {
+      isLocked: false,
+      pinHash: null,
+      updatedAt: serverTimestamp()
+    });
+    setUnlockedFolderIds(prev => {
+      const copy = { ...prev };
+      delete copy[folderId];
+      return copy;
+    });
+  };
+
+  const handleLockAllNow = useCallback(() => {
+    setUnlockedFolderIds({});
+    setExpandedFolders({});
+    // If user is currently viewing a locked folder, redirect safely to Instant Links
+    if (selectedFolderId && selectedFolderId !== 'favorites') {
+      setSelectedFolderId(null);
+    }
+  }, [selectedFolderId]);
 
   const handleToggleExpand = useCallback((id, e) => {
     e.stopPropagation();
@@ -191,11 +273,14 @@ export default function App() {
     });
   }, []);
 
-  const handleLogout = useCallback(() => signOut(auth), []);
+  const handleLogout = useCallback(() => {
+    setUnlockedFolderIds({});
+    signOut(auth);
+  }, []);
+
   const handleOpenMobileSidebar = useCallback(() => setIsMobileSidebarOpen(true), []);
   const handleCloseMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
 
-  // Optimistic Save Folder (closes modal immediately)
   const handleSaveFolder = async (name) => {
     if (!currentUser) return;
     const targetParent = parentFolderId;
@@ -214,6 +299,8 @@ export default function App() {
         name,
         parentId: targetParent,
         userId: currentUser.uid,
+        isLocked: false,
+        pinHash: null,
         createdAt: serverTimestamp()
       });
       if (targetParent) {
@@ -255,7 +342,6 @@ export default function App() {
     }
   };
 
-  // Optimistic Save Link (closes modal immediately; local cache renders new card instantly)
   const handleSaveLink = async ({ title, url, tags }) => {
     if (!currentUser) return;
     let formattedUrl = url.trim();
@@ -289,7 +375,7 @@ export default function App() {
     }
   };
 
-  // Shared Date Range Check & Sort Comparator
+  // Date Filter & Sort Comparators
   const matchesDateRange = useCallback((item) => {
     if (dateFilter === 'all') return true;
     const targetMs = sortBy === 'modified'
@@ -312,18 +398,30 @@ export default function App() {
 
   const sortItems = useCallback((a, b) => {
     if (sortBy === 'oldest') {
-      return getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt); // Ascending
+      return getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt);
     }
     if (sortBy === 'modified') {
       const aMod = getTimestampMs(a.updatedAt || a.createdAt);
       const bMod = getTimestampMs(b.updatedAt || b.createdAt);
-      return bMod - aMod; // Most recently modified first
+      return bMod - aMod;
     }
-    // Default: 'newest' (Descending)
     return getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt);
   }, [sortBy]);
 
-  // Filtered & Sorted Subfolders
+  // Helper: checks if a folder and all its ancestors are unlocked
+  const isFolderUnlockedInSession = useCallback((folderId) => {
+    let currId = folderId;
+    const visited = new Set();
+    while (currId && !visited.has(currId)) {
+      visited.add(currId);
+      const f = folders.find(item => item.id === currId);
+      if (!f) break;
+      if (f.isLocked && !unlockedFolderIds[f.id]) return false;
+      currId = f.parentId;
+    }
+    return true;
+  }, [folders, unlockedFolderIds]);
+
   const currentSubfolders = useMemo(() => {
     if (selectedFolderId === null || selectedFolderId === 'favorites') return [];
     return folders
@@ -335,12 +433,11 @@ export default function App() {
       .sort(sortItems);
   }, [folders, selectedFolderId, debouncedSearch, matchesDateRange, sortItems]);
 
-  // Filtered & Sorted Links
   const filteredLinks = useMemo(() => {
     return links
       .filter(link => {
         const matchesView = selectedFolderId === 'favorites'
-          ? Boolean(link.isStarred)
+          ? Boolean(link.isStarred) && (!link.folderId || isFolderUnlockedInSession(link.folderId))
           : selectedFolderId === null
             ? !link.folderId
             : link.folderId === selectedFolderId;
@@ -353,7 +450,7 @@ export default function App() {
         return matchesView && matchesSearch && matchesDateRange(link);
       })
       .sort(sortItems);
-  }, [links, selectedFolderId, debouncedSearch, matchesDateRange, sortItems]);
+  }, [links, selectedFolderId, debouncedSearch, matchesDateRange, sortItems, isFolderUnlockedInSession]);
 
   if (authLoading) {
     return (
@@ -364,15 +461,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return (
-      <Suspense fallback={
-        <div className="min-h-screen flex items-center justify-center bg-slate-50">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-        </div>
-      }>
-        <AuthScreen />
-      </Suspense>
-    );
+    return <AuthScreen />;
   }
 
   return (
@@ -387,6 +476,9 @@ export default function App() {
         onSelectFolder={handleSelectFolder}
         expandedFolders={expandedFolders}
         onToggleExpand={handleToggleExpand}
+        unlockedFolderIds={unlockedFolderIds}
+        onOpenLockModal={handleOpenLockModal}
+        onLockNow={handleLockAllNow}
         onOpenCreateFolder={openCreateFolderModal}
         onOpenRenameFolder={openRenameFolderModal}
         onPromptDeleteFolder={promptDeleteFolder}
@@ -414,6 +506,8 @@ export default function App() {
             subfolders={currentSubfolders}
             allFolders={folders}
             allLinks={links}
+            unlockedFolderIds={unlockedFolderIds}
+            onOpenLockModal={handleOpenLockModal}
             onSelectFolder={handleSelectFolder}
             onRenameFolder={openRenameFolderModal}
             onDeleteFolder={promptDeleteFolder}
@@ -441,6 +535,19 @@ export default function App() {
             isDeleting={isDeleting}
             onClose={() => setDeleteTarget(null)}
             onConfirm={handleConfirmDelete}
+          />
+        )}
+
+        {lockModalState && (
+          <FolderLockModal
+            lockModalState={lockModalState}
+            onClose={() => {
+              setLockModalState(null);
+              setPendingFolderIdAfterUnlock(null);
+            }}
+            onUnlockSuccess={handleUnlockSuccess}
+            onSetPin={handleSetFolderPin}
+            onRemovePin={handleRemoveFolderPin}
           />
         )}
 
