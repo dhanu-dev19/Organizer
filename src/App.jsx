@@ -4,6 +4,7 @@ import {
   collection, query, where, onSnapshot, addDoc,
   deleteDoc, updateDoc, doc, serverTimestamp
 } from 'firebase/firestore';
+import AuthScreen from './components/AuthScreen';
 import { auth, db } from './firebase';
 
 import Sidebar from './components/Sidebar';
@@ -11,7 +12,7 @@ import Header from './components/Header';
 import FolderGrid from './components/FolderGrid';
 import LinkGrid from './components/LinkGrid';
 
-const AuthScreen = lazy(() => import('./components/AuthScreen'));
+// const AuthScreen = lazy(() => import('./components/AuthScreen'));
 const DeleteConfirmModal = lazy(() => import('./components/Modals').then(m => ({ default: m.DeleteConfirmModal })));
 const FolderModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderModal })));
 const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));

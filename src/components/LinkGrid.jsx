@@ -1,10 +1,23 @@
+
+
 import React, { useState, useEffect } from 'react';
 import {
   Star, Bookmark, FolderPlus, Plus, ArrowUpRight,
   Folder, Zap, Tag, Check, Copy, Edit3, Trash2, ChevronDown
 } from 'lucide-react';
 
-const ITEMS_PER_PAGE = 8;
+const getPageSize = () => {
+  if (typeof window !== 'undefined' && window.innerWidth >= 1024) {
+    return 12; // Desktop (3 columns x 4 rows)
+  }
+  return 8; // Tablet (2 columns x 4 rows) & Mobile (1 column x 8 rows)
+};
+
+const formatShortDate = (ts) => {
+  if (!ts) return 'Just now';
+  const date = typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
 
 const LinkGrid = React.memo(function LinkGrid({
   links,
@@ -19,14 +32,30 @@ const LinkGrid = React.memo(function LinkGrid({
   onOpenCreateFolder
 }) {
   const [copiedId, setCopiedId] = useState(null);
-  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [pageSize, setPageSize] = useState(getPageSize);
+  const [visibleCount, setVisibleCount] = useState(getPageSize);
 
   const isFolderView = selectedFolderId !== null && selectedFolderId !== 'favorites';
 
-  // Reset visible count to 8 whenever the active folder or filtered link list changes
+  // Adjust page batch size dynamically if viewport crosses desktop breakpoint (1024px)
   useEffect(() => {
-    setVisibleCount(ITEMS_PER_PAGE);
-  }, [selectedFolderId, links.length]);
+    const handleResize = () => {
+      const nextSize = getPageSize();
+      setPageSize(prevSize => {
+        if (prevSize !== nextSize) {
+          setVisibleCount(nextSize);
+        }
+        return nextSize;
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Reset visible count whenever active folder or filtered results change
+  useEffect(() => {
+    setVisibleCount(pageSize);
+  }, [selectedFolderId, links.length, pageSize]);
 
   const handleCopy = (url, id) => {
     navigator.clipboard.writeText(url);
@@ -46,7 +75,7 @@ const LinkGrid = React.memo(function LinkGrid({
               ? `Starred Bookmarks (${links.length})`
               : `Links (${links.length})`}
           </h3>
-          {links.length > ITEMS_PER_PAGE && (
+          {links.length > pageSize && (
             <span className="text-[11px] text-slate-400">
               Showing {Math.min(visibleCount, links.length)} of {links.length}
             </span>
@@ -96,7 +125,8 @@ const LinkGrid = React.memo(function LinkGrid({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+          {/* Mobile: 1 col | Tablet: 2 cols | Desktop: 3 cols */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {visibleLinks.map(link => {
               let domain = '';
               try {
@@ -185,7 +215,12 @@ const LinkGrid = React.memo(function LinkGrid({
                   </div>
 
                   <div className="border-t border-slate-100 pt-2.5 mt-3 flex items-center justify-between text-xs text-slate-400">
-                    <span className="text-[10px] sm:text-[11px] truncate max-w-[130px]">{domain}</span>
+                    <div className="flex flex-col min-w-0 pr-2">
+                      <span className="text-[10px] sm:text-[11px] truncate">{domain}</span>
+                      <span className="text-[9px] text-slate-400/80">
+                        {link.updatedAt ? `Edited ${formatShortDate(link.updatedAt)}` : formatShortDate(link.createdAt)}
+                      </span>
+                    </div>
                     <div className="flex items-center space-x-1 shrink-0">
                       <button
                         title="Copy Link"
@@ -215,12 +250,11 @@ const LinkGrid = React.memo(function LinkGrid({
             })}
           </div>
 
-          {/* Load More Button */}
           {remainingCount > 0 && (
             <div className="mt-6 flex justify-center">
               <button
                 type="button"
-                onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
+                onClick={() => setVisibleCount(prev => prev + pageSize)}
                 className="inline-flex items-center space-x-2 px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-blue-300 rounded-xl text-xs font-semibold shadow-2xs transition-all active:scale-98"
               >
                 <span>Show More ({remainingCount} remaining)</span>
