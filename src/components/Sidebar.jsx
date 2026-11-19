@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Bookmark, FolderPlus, X, Zap, Star, User, LogOut,
   ChevronDown, ChevronRight, Video, FolderOpen, Folder,
-  Plus, Pencil, Trash2, Lock, Unlock, MoreVertical
+  Plus, Pencil, Trash2, Lock, Unlock, MoreVertical,KeyRound
 } from 'lucide-react';
 
 const Sidebar = React.memo(function Sidebar({
@@ -16,6 +16,8 @@ const Sidebar = React.memo(function Sidebar({
   expandedFolders,
   onToggleExpand,
   unlockedFolderIds,
+  hasMasterPin,           
+  onOpenMasterPinModal,
   onOpenLockModal,
   onLockNow,
   onOpenCreateFolder,
@@ -335,8 +337,8 @@ const Sidebar = React.memo(function Sidebar({
         </div>
 
         {/* User Footer */}
-        <div className="p-3.5 md:p-3 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2.5 truncate">
+        <div className="p-3.5 md:p-3 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between shrink-0 gap-1.5">
+          <div className="flex items-center space-x-2.5 truncate min-w-0">
             <div className="w-9 h-9 md:w-8 md:h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold shrink-0">
               <User className="w-4 h-4" />
             </div>
@@ -345,13 +347,29 @@ const Sidebar = React.memo(function Sidebar({
               <p className="text-[10px] text-emerald-600 font-medium">Synced</p>
             </div>
           </div>
-          <button
-            onClick={onLogout}
-            title="Log Out"
-            className="p-2 md:p-1.5 text-slate-400 hover:text-red-600 hover:bg-white rounded-xl md:rounded-lg transition shrink-0 ml-1"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+
+          <div className="flex items-center space-x-1 shrink-0">
+            <button
+              type="button"
+              onClick={onOpenMasterPinModal}
+              title={hasMasterPin ? 'Change Master 6-Digit Password' : 'Set Master 6-Digit Password'}
+              className={`p-2 md:p-1.5 rounded-xl md:rounded-lg transition ${
+                hasMasterPin
+                  ? 'text-amber-600 hover:bg-amber-50'
+                  : 'text-slate-400 hover:text-blue-600 hover:bg-white'
+              }`}
+            >
+              <KeyRound className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onLogout}
+              title="Log Out"
+              className="p-2 md:p-1.5 text-slate-400 hover:text-red-600 hover:bg-white rounded-xl md:rounded-lg transition"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </aside>
     </>

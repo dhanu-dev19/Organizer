@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, query, where, onSnapshot, addDoc,
-  deleteDoc, updateDoc, doc, serverTimestamp
+  deleteDoc, updateDoc, setDoc, doc, serverTimestamp
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
@@ -16,6 +16,8 @@ const DeleteConfirmModal = lazy(() => import('./components/Modals').then(m => ({
 const FolderModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderModal })));
 const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));
 const FolderLockModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderLockModal })));
+const MasterPinModal = lazy(() => import('./components/Modals').then(m => ({ default: m.MasterPinModal })));
+
 
 const getTimestampMs = (ts) => {
   if (!ts) return Date.now();
@@ -35,9 +37,11 @@ export default function App() {
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
 
-  // Locker States (Session-only: clears on refresh or logout)
+  // Master & Folder Locker States
+  const [masterPinHash, setMasterPinHash] = useState(null);
+  const [isMasterPinModalOpen, setIsMasterPinModalOpen] = useState(false);
   const [unlockedFolderIds, setUnlockedFolderIds] = useState({});
-  const [lockModalState, setLockModalState] = useState(null); // { mode: 'unlock' | 'set' | 'remove', folder }
+  const [lockModalState, setLockModalState] = useState(null);
   const [pendingFolderIdAfterUnlock, setPendingFolderIdAfterUnlock] = useState(null);
 
   // Search, Sort & Date Filter States
@@ -72,10 +76,25 @@ export default function App() {
         setLinks([]);
         setSelectedFolderId(null);
         setUnlockedFolderIds({});
+        setMasterPinHash(null);
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // User Settings Listener (Master PIN Hash)
+  useEffect(() => {
+    if (!currentUser) return;
+    const userDocRef = doc(db, 'users', currentUser.uid);
+
+    return onSnapshot(userDocRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setMasterPinHash(snapshot.data().masterPinHash || null);
+      } else {
+        setMasterPinHash(null);
+      }
+    }, (err) => console.error("User settings fetch error:", err));
+  }, [currentUser]);
 
   // Folders Listener
   useEffect(() => {
@@ -131,7 +150,6 @@ export default function App() {
     return trail;
   }, [selectedFolderId, folders]);
 
-  // Helper to expand parent folders and navigate
   const navigateToFolder = useCallback((folderId, allFoldersList) => {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
@@ -147,14 +165,12 @@ export default function App() {
     }
   }, []);
 
-  // Intercept folder selection if the folder (or an ancestor) is locked
   const handleSelectFolder = useCallback((folderId) => {
     if (!folderId || folderId === 'favorites') {
       navigateToFolder(folderId, folders);
       return;
     }
 
-    // Check from outermost ancestor down to target folder for the first locked & un-unlocked folder
     const chain = [];
     let curr = folders.find(f => f.id === folderId);
     const visited = new Set();
@@ -174,7 +190,7 @@ export default function App() {
     navigateToFolder(folderId, folders);
   }, [folders, unlockedFolderIds, navigateToFolder]);
 
-  // Locker Callbacks
+  // Locker Handlers
   const handleOpenLockModal = useCallback((mode, folder) => {
     setPendingFolderIdAfterUnlock(null);
     setLockModalState({ mode, folder });
@@ -187,13 +203,7 @@ export default function App() {
     navigateToFolder(targetId, folders);
   }, [pendingFolderIdAfterUnlock, folders, navigateToFolder]);
 
-  const handleSetFolderPin = async (folderId, pinHash) => {
-    await updateDoc(doc(db, 'folders', folderId), {
-      isLocked: true,
-      pinHash,
-      updatedAt: serverTimestamp()
-    });
-    // Lock immediately in session and collapse it in sidebar
+  const clearUnlockedAndRedirect = (folderId) => {
     setUnlockedFolderIds(prev => {
       const copy = { ...prev };
       delete copy[folderId];
@@ -206,9 +216,50 @@ export default function App() {
     }
   };
 
+  // First-time Master PIN creation + lock folder
+  const handleSaveMasterAndLock = async (folderId, hashedMasterPin) => {
+    if (!currentUser) return;
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      masterPinHash: hashedMasterPin,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    await updateDoc(doc(db, 'folders', folderId), {
+      isLocked: true,
+      useMasterPin: true,
+      pinHash: null,
+      updatedAt: serverTimestamp()
+    });
+    clearUnlockedAndRedirect(folderId);
+  };
+
+  // Lock folder using existing Master PIN
+  const handleLockWithMaster = async (folderId) => {
+    await updateDoc(doc(db, 'folders', folderId), {
+      isLocked: true,
+      useMasterPin: true,
+      pinHash: null,
+      updatedAt: serverTimestamp()
+    });
+    clearUnlockedAndRedirect(folderId);
+  };
+
+  // Lock folder using a folder-specific Custom PIN
+  const handleLockWithCustom = async (folderId, customPinHash) => {
+    await updateDoc(doc(db, 'folders', folderId), {
+      isLocked: true,
+      useMasterPin: false,
+      pinHash: customPinHash,
+      updatedAt: serverTimestamp()
+    });
+    clearUnlockedAndRedirect(folderId);
+  };
+
+  // Remove lock from folder
   const handleRemoveFolderPin = async (folderId) => {
     await updateDoc(doc(db, 'folders', folderId), {
       isLocked: false,
+      useMasterPin: false,
       pinHash: null,
       updatedAt: serverTimestamp()
     });
@@ -222,7 +273,6 @@ export default function App() {
   const handleLockAllNow = useCallback(() => {
     setUnlockedFolderIds({});
     setExpandedFolders({});
-    // If user is currently viewing a locked folder, redirect safely to Instant Links
     if (selectedFolderId && selectedFolderId !== 'favorites') {
       setSelectedFolderId(null);
     }
@@ -300,6 +350,7 @@ export default function App() {
         parentId: targetParent,
         userId: currentUser.uid,
         isLocked: false,
+        useMasterPin: false,
         pinHash: null,
         createdAt: serverTimestamp()
       });
@@ -308,6 +359,21 @@ export default function App() {
       }
     }
   };
+
+  const handleUpdateMasterPin = async (newMasterHash) => {
+  if (!currentUser) return;
+  await setDoc(doc(db, 'users', currentUser.uid), {
+    masterPinHash: newMasterHash,
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+
+  // Re-lock active session folders so the new Master PIN takes effect immediately
+  setUnlockedFolderIds({});
+  setExpandedFolders({});
+  if (selectedFolderId && selectedFolderId !== 'favorites') {
+    setSelectedFolderId(null);
+  }
+};
 
   // Recursive Delete
   const deleteFolderRecursive = async (folderId) => {
@@ -375,7 +441,6 @@ export default function App() {
     }
   };
 
-  // Date Filter & Sort Comparators
   const matchesDateRange = useCallback((item) => {
     if (dateFilter === 'all') return true;
     const targetMs = sortBy === 'modified'
@@ -408,7 +473,6 @@ export default function App() {
     return getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt);
   }, [sortBy]);
 
-  // Helper: checks if a folder and all its ancestors are unlocked
   const isFolderUnlockedInSession = useCallback((folderId) => {
     let currId = folderId;
     const visited = new Set();
@@ -477,6 +541,8 @@ export default function App() {
         expandedFolders={expandedFolders}
         onToggleExpand={handleToggleExpand}
         unlockedFolderIds={unlockedFolderIds}
+        hasMasterPin={Boolean(masterPinHash)}
+        onOpenMasterPinModal={() => setIsMasterPinModalOpen(true)}
         onOpenLockModal={handleOpenLockModal}
         onLockNow={handleLockAllNow}
         onOpenCreateFolder={openCreateFolderModal}
@@ -533,6 +599,8 @@ export default function App() {
           <DeleteConfirmModal
             deleteTarget={deleteTarget}
             isDeleting={isDeleting}
+            userId={currentUser.uid}
+            masterPinHash={masterPinHash}
             onClose={() => setDeleteTarget(null)}
             onConfirm={handleConfirmDelete}
           />
@@ -541,12 +609,16 @@ export default function App() {
         {lockModalState && (
           <FolderLockModal
             lockModalState={lockModalState}
+            userId={currentUser.uid}
+            masterPinHash={masterPinHash}
             onClose={() => {
               setLockModalState(null);
               setPendingFolderIdAfterUnlock(null);
             }}
             onUnlockSuccess={handleUnlockSuccess}
-            onSetPin={handleSetFolderPin}
+            onSaveMasterAndLock={handleSaveMasterAndLock}
+            onLockWithMaster={handleLockWithMaster}
+            onLockWithCustom={handleLockWithCustom}
             onRemovePin={handleRemoveFolderPin}
           />
         )}
@@ -576,6 +648,16 @@ export default function App() {
             onSave={handleSaveLink}
           />
         )}
+
+        {isMasterPinModalOpen && (
+  <MasterPinModal
+    isOpen={isMasterPinModalOpen}
+    userId={currentUser.uid}
+    masterPinHash={masterPinHash}
+    onClose={() => setIsMasterPinModalOpen(false)}
+    onUpdateMasterPin={handleUpdateMasterPin}
+  />
+   )}
       </Suspense>
     </div>
   );
