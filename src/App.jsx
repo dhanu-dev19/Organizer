@@ -17,7 +17,7 @@ const FolderModal = lazy(() => import('./components/Modals').then(m => ({ defaul
 const LinkModal = lazy(() => import('./components/Modals').then(m => ({ default: m.LinkModal })));
 const FolderLockModal = lazy(() => import('./components/Modals').then(m => ({ default: m.FolderLockModal })));
 const MasterPinModal = lazy(() => import('./components/Modals').then(m => ({ default: m.MasterPinModal })));
-
+const AISearchPage = lazy(() => import('./components/AISearchPage'));
 
 const getTimestampMs = (ts) => {
   if (!ts) return Date.now();
@@ -132,7 +132,7 @@ export default function App() {
 
   // Breadcrumb Trail
   const breadcrumbs = useMemo(() => {
-    if (!selectedFolderId || selectedFolderId === 'favorites') return [];
+    if (!selectedFolderId || selectedFolderId === 'favorites' || selectedFolderId === 'ai-search') return [];
     const trail = [];
     let currentId = selectedFolderId;
     const visited = new Set();
@@ -154,7 +154,7 @@ export default function App() {
     setSelectedFolderId(folderId);
     setIsMobileSidebarOpen(false);
 
-    if (folderId && folderId !== 'favorites') {
+    if (folderId && folderId !== 'favorites' && folderId !== 'ai-search') {
       const toExpand = {};
       let curr = allFoldersList.find(f => f.id === folderId);
       while (curr && curr.parentId) {
@@ -166,7 +166,7 @@ export default function App() {
   }, []);
 
   const handleSelectFolder = useCallback((folderId) => {
-    if (!folderId || folderId === 'favorites') {
+    if (!folderId || folderId === 'favorites' || folderId === 'ai-search') {
       navigateToFolder(folderId, folders);
       return;
     }
@@ -273,7 +273,7 @@ export default function App() {
   const handleLockAllNow = useCallback(() => {
     setUnlockedFolderIds({});
     setExpandedFolders({});
-    if (selectedFolderId && selectedFolderId !== 'favorites') {
+    if (selectedFolderId && selectedFolderId !== 'favorites' && selectedFolderId !== 'ai-search') {
       setSelectedFolderId(null);
     }
   }, [selectedFolderId]);
@@ -285,7 +285,7 @@ export default function App() {
 
   const openCreateFolderModal = useCallback((parentId = null) => {
     setEditingFolder(null);
-    setParentFolderId(parentId === 'favorites' ? null : parentId);
+    setParentFolderId(parentId === 'favorites' || parentId === 'ai-search' ? null : parentId);
     setIsFolderModalOpen(true);
   }, []);
 
@@ -361,19 +361,18 @@ export default function App() {
   };
 
   const handleUpdateMasterPin = async (newMasterHash) => {
-  if (!currentUser) return;
-  await setDoc(doc(db, 'users', currentUser.uid), {
-    masterPinHash: newMasterHash,
-    updatedAt: serverTimestamp()
-  }, { merge: true });
+    if (!currentUser) return;
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      masterPinHash: newMasterHash,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
 
-  // Re-lock active session folders so the new Master PIN takes effect immediately
-  setUnlockedFolderIds({});
-  setExpandedFolders({});
-  if (selectedFolderId && selectedFolderId !== 'favorites') {
-    setSelectedFolderId(null);
-  }
-};
+    setUnlockedFolderIds({});
+    setExpandedFolders({});
+    if (selectedFolderId && selectedFolderId !== 'favorites' && selectedFolderId !== 'ai-search') {
+      setSelectedFolderId(null);
+    }
+  };
 
   // Recursive Delete
   const deleteFolderRecursive = async (folderId) => {
@@ -429,11 +428,15 @@ export default function App() {
       });
     } else {
       const isFavoritesView = selectedFolderId === 'favorites';
+      const targetFolder = selectedFolderId === 'favorites' || selectedFolderId === 'ai-search'
+        ? null
+        : selectedFolderId;
+
       await addDoc(collection(db, 'links'), {
         title: title.trim(),
         url: formattedUrl,
         tags: tagsArray,
-        folderId: isFavoritesView ? null : selectedFolderId,
+        folderId: targetFolder,
         userId: currentUser.uid,
         isStarred: isFavoritesView,
         createdAt: serverTimestamp()
@@ -486,8 +489,22 @@ export default function App() {
     return true;
   }, [folders, unlockedFolderIds]);
 
+  // Accessible (unlocked) links for AI Search & Manual Search
+  const { accessibleLinks, lockedLinksCount } = useMemo(() => {
+    const accessible = [];
+    let lockedCount = 0;
+    for (const link of links) {
+      if (!link.folderId || isFolderUnlockedInSession(link.folderId)) {
+        accessible.push(link);
+      } else {
+        lockedCount++;
+      }
+    }
+    return { accessibleLinks: accessible, lockedLinksCount: lockedCount };
+  }, [links, isFolderUnlockedInSession]);
+
   const currentSubfolders = useMemo(() => {
-    if (selectedFolderId === null || selectedFolderId === 'favorites') return [];
+    if (selectedFolderId === null || selectedFolderId === 'favorites' || selectedFolderId === 'ai-search') return [];
     return folders
       .filter(f =>
         f.parentId === selectedFolderId &&
@@ -568,29 +585,51 @@ export default function App() {
         />
 
         <div className="flex-1 p-3 sm:p-6 overflow-y-auto space-y-6">
-          <FolderGrid
-            subfolders={currentSubfolders}
-            allFolders={folders}
-            allLinks={links}
-            unlockedFolderIds={unlockedFolderIds}
-            onOpenLockModal={handleOpenLockModal}
-            onSelectFolder={handleSelectFolder}
-            onRenameFolder={openRenameFolderModal}
-            onDeleteFolder={promptDeleteFolder}
-          />
+          {selectedFolderId === 'ai-search' ? (
+            <Suspense
+              fallback={
+                <div className="py-16 flex justify-center">
+                  <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
+                </div>
+              }
+            >
+              <AISearchPage
+                accessibleLinks={accessibleLinks}
+                lockedLinksCount={lockedLinksCount}
+                allFolders={folders}
+                onSelectFolder={handleSelectFolder}
+                onToggleStar={handleToggleStar}
+                onEditLink={openEditLinkModal}
+                onDeleteLink={promptDeleteLink}
+              />
+            </Suspense>
+          ) : (
+            <>
+              <FolderGrid
+                subfolders={currentSubfolders}
+                allFolders={folders}
+                allLinks={links}
+                unlockedFolderIds={unlockedFolderIds}
+                onOpenLockModal={handleOpenLockModal}
+                onSelectFolder={handleSelectFolder}
+                onRenameFolder={openRenameFolderModal}
+                onDeleteFolder={promptDeleteFolder}
+              />
 
-          <LinkGrid
-            links={filteredLinks}
-            subfoldersCount={currentSubfolders.length}
-            allFolders={folders}
-            selectedFolderId={selectedFolderId}
-            onSelectFolder={handleSelectFolder}
-            onToggleStar={handleToggleStar}
-            onEditLink={openEditLinkModal}
-            onDeleteLink={promptDeleteLink}
-            onOpenAddLink={openAddLinkModal}
-            onOpenCreateFolder={openCreateFolderModal}
-          />
+              <LinkGrid
+                links={filteredLinks}
+                subfoldersCount={currentSubfolders.length}
+                allFolders={folders}
+                selectedFolderId={selectedFolderId}
+                onSelectFolder={handleSelectFolder}
+                onToggleStar={handleToggleStar}
+                onEditLink={openEditLinkModal}
+                onDeleteLink={promptDeleteLink}
+                onOpenAddLink={openAddLinkModal}
+                onOpenCreateFolder={openCreateFolderModal}
+              />
+            </>
+          )}
         </div>
       </main>
 
@@ -650,14 +689,14 @@ export default function App() {
         )}
 
         {isMasterPinModalOpen && (
-  <MasterPinModal
-    isOpen={isMasterPinModalOpen}
-    userId={currentUser.uid}
-    masterPinHash={masterPinHash}
-    onClose={() => setIsMasterPinModalOpen(false)}
-    onUpdateMasterPin={handleUpdateMasterPin}
-  />
-   )}
+          <MasterPinModal
+            isOpen={isMasterPinModalOpen}
+            userId={currentUser.uid}
+            masterPinHash={masterPinHash}
+            onClose={() => setIsMasterPinModalOpen(false)}
+            onUpdateMasterPin={handleUpdateMasterPin}
+          />
+        )}
       </Suspense>
     </div>
   );

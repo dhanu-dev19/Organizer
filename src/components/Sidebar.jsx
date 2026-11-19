@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Bookmark, FolderPlus, X, Zap, Star, User, LogOut,
   ChevronDown, ChevronRight, Video, FolderOpen, Folder,
-  Plus, Pencil, Trash2, Lock, Unlock, MoreVertical,KeyRound
+  Plus, Pencil, Trash2, Lock, Unlock, MoreVertical,KeyRound,Sparkles
 } from 'lucide-react';
 
 const Sidebar = React.memo(function Sidebar({
@@ -16,7 +16,7 @@ const Sidebar = React.memo(function Sidebar({
   expandedFolders,
   onToggleExpand,
   unlockedFolderIds,
-  hasMasterPin,           
+  hasMasterPin,
   onOpenMasterPinModal,
   onOpenLockModal,
   onLockNow,
@@ -307,6 +307,24 @@ const Sidebar = React.memo(function Sidebar({
                   {starredCount}
                 </span>
               </button>
+
+              <button
+                onClick={() => onSelectFolder('ai-search')}
+                className={`w-full flex items-center justify-between px-3 py-2.5 md:py-2 rounded-xl md:rounded-lg text-sm transition ${
+                  selectedFolderId === 'ai-search'
+                    ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5">
+                  <Sparkles className={`w-4 h-4 ${selectedFolderId === 'ai-search' ? 'text-indigo-600' : 'text-indigo-400'}`} />
+                  <span>Instant Search</span>
+                </div>
+                <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-indigo-100/80 text-indigo-700">
+                  AI
+                </span>
+              </button>
+
             </div>
 
             <div>
