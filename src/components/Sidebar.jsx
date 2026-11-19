@@ -4,6 +4,7 @@ import {
   ChevronDown, ChevronRight, Video, FolderOpen, Folder,
   Plus, Pencil, Trash2, Lock, Unlock, MoreVertical,KeyRound,Sparkles
 } from 'lucide-react';
+import BrandLogo from './BrandLogo';
 
 const Sidebar = React.memo(function Sidebar({
   currentUser,
@@ -248,11 +249,11 @@ const Sidebar = React.memo(function Sidebar({
           {/* Brand Header */}
           <div className="p-4 border-b border-slate-100 flex items-center justify-between shrink-0">
             <div className="flex items-center space-x-2.5">
-              <div className="w-9 h-9 md:w-8 md:h-8 rounded-xl md:rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs">
-                <Bookmark className="w-5 h-5 md:w-4 md:h-4" />
-              </div>
-              <span className="font-bold text-slate-900 text-base md:text-sm tracking-wide">Organizer</span>
-            </div>
+  <BrandLogo className="w-9 h-9 md:w-8 md:h-8 shrink-0 shadow-xs" />
+  <span className="font-bold text-slate-900 text-base md:text-sm tracking-tight">
+    Link<span className="text-blue-600">Stack</span>
+  </span>
+</div>
             <div className="flex items-center space-x-1.5">
               <button
                 title="New Root Folder"

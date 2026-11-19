@@ -6,6 +6,7 @@ import {
   signInWithPopup
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
+import BrandLogo from './BrandLogo';
 
 export default function AuthScreen() {
   const [isRegistering, setIsRegistering] = useState(false);
@@ -47,10 +48,10 @@ export default function AuthScreen() {
     <div className="min-h-screen bg-gradient-to-br from-slate-100 to-blue-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 sm:p-8 border border-slate-100">
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 bg-blue-100 text-blue-600 rounded-2xl mb-3">
-            <Bookmark className="w-6 h-6 sm:w-7 sm:h-7" />
-          </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-slate-800">Link Organizer</h1>
+          <BrandLogo className="w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-3 drop-shadow-md" />
+<h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
+  Link<span className="text-blue-600">Stack</span>
+</h1>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">
             Please sign in to access and manage your bookmarks
           </p>
