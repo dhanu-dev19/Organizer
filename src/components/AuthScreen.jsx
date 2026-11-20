@@ -1,19 +1,103 @@
-import React, { useState } from 'react';
-import { Bookmark, Mail, Lock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Mail, Lock, User } from 'lucide-react';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  getAdditionalUserInfo,
+  updateProfile
 } from 'firebase/auth';
-import { auth, googleProvider } from '../firebase';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db, googleProvider } from '../firebase';
 import BrandLogo from './BrandLogo';
+
+// Syncs user's email & displayName to Firestore (creates profile for new users, logs in existing users)
+async function syncUserProfileToFirestore(user, isNewUserFlag = false) {
+  if (!user) return;
+  const userRef = doc(db, 'users', user.uid);
+  const existingSnap = await getDoc(userRef);
+
+  const fallbackName =
+    user.displayName ||
+    (user.email ? user.email.split('@')[0] : 'LinkStack User');
+
+  if (!existingSnap.exists() || isNewUserFlag) {
+    // New user: store fetched email, name, and avatar
+    await setDoc(
+      userRef,
+      {
+        uid: user.uid,
+        email: user.email || '',
+        displayName: fallbackName,
+        photoURL: user.photoURL || null,
+        createdAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+  } else {
+    // Existing user: treat as login and backfill name/email if missing without touching masterPinHash
+    const data = existingSnap.data();
+    await setDoc(
+      userRef,
+      {
+        email: user.email || data.email || '',
+        displayName: data.displayName || fallbackName,
+        photoURL: user.photoURL || data.photoURL || null,
+        lastLoginAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+  }
+}
 
 export default function AuthScreen() {
   const [isRegistering, setIsRegistering] = useState(false);
+  const [fullName, setFullName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [loadingAction, setLoadingAction] = useState(null);
+
+  // Handle mobile/popup-blocked Google redirect sign-in completion on page reload
+  useEffect(() => {
+    let isMounted = true;
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result?.user) {
+          const additionalInfo = getAdditionalUserInfo(result);
+          await syncUserProfileToFirestore(result.user, Boolean(additionalInfo?.isNewUser));
+        }
+      })
+      .catch((err) => {
+        if (isMounted && err?.code !== 'auth/popup-closed-by-user') {
+          setAuthError(formatFirebaseError(err));
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const formatFirebaseError = (err) => {
+    const code = err?.code || '';
+    if (code === 'auth/unauthorized-domain') {
+      return 'This domain is not authorized for Google Sign-In. Add your domain in Firebase Console → Authentication → Settings → Authorized domains.';
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return 'Google Sign-In is disabled in Firebase Console. Enable Google under Authentication → Sign-in method.';
+    }
+    if (code === 'auth/account-exists-with-different-credential') {
+      return 'An account already exists with this email using a password. Sign in with your email & password first.';
+    }
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return 'Google sign-in popup was closed before completing.';
+    }
+    return (err?.message || 'Authentication failed').replace('Firebase: ', '');
+  };
 
   const handleEmailAuth = async (e) => {
     e.preventDefault();
@@ -22,12 +106,16 @@ export default function AuthScreen() {
     setLoadingAction('email');
     try {
       if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+        const cred = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+        const cleanName = fullName.trim() || authEmail.split('@')[0];
+        await updateProfile(cred.user, { displayName: cleanName });
+        await syncUserProfileToFirestore({ ...cred.user, displayName: cleanName }, true);
       } else {
-        await signInWithEmailAndPassword(auth, authEmail, authPassword);
+        const cred = await signInWithEmailAndPassword(auth, authEmail, authPassword);
+        await syncUserProfileToFirestore(cred.user, false);
       }
     } catch (err) {
-      setAuthError(err.message.replace('Firebase: ', ''));
+      setAuthError(formatFirebaseError(err));
       setLoadingAction(null);
     }
   };
@@ -36,10 +124,26 @@ export default function AuthScreen() {
     if (loadingAction) return;
     setAuthError('');
     setLoadingAction('google');
+
+    // Always prompt account picker & request email + profile scopes
+    googleProvider.setCustomParameters({ prompt: 'select_account' });
+
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      const additionalInfo = getAdditionalUserInfo(result);
+      await syncUserProfileToFirestore(result.user, Boolean(additionalInfo?.isNewUser));
     } catch (err) {
-      setAuthError(err.message.replace('Firebase: ', ''));
+      // Automatically fall back to redirect flow if popup is blocked by browser
+      if (err?.code === 'auth/popup-blocked') {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectErr) {
+          setAuthError(formatFirebaseError(redirectErr));
+        }
+      } else {
+        setAuthError(formatFirebaseError(err));
+      }
       setLoadingAction(null);
     }
   };
@@ -49,21 +153,43 @@ export default function AuthScreen() {
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 sm:p-8 border border-slate-100">
         <div className="text-center mb-6">
           <BrandLogo className="w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-3 drop-shadow-md" />
-<h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
-  Link<span className="text-blue-600">Stack</span>
-</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
+            Link<span className="text-blue-600">Stack</span>
+          </h1>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">
-            Please sign in to access and manage your bookmarks
+            {isRegistering
+              ? 'Create your account to organize & secure your links'
+              : 'Please sign in to access and manage your bookmarks'}
           </p>
         </div>
 
         {authError && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl">
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl leading-relaxed">
             {authError}
           </div>
         )}
 
         <form onSubmit={handleEmailAuth} className="space-y-3.5">
+          {isRegistering && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                Full Name
+              </label>
+              <div className="relative">
+                <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  required
+                  disabled={Boolean(loadingAction)}
+                  placeholder="Dhanush"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-60"
+                />
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Email</label>
             <div className="relative">
@@ -160,4 +286,3 @@ export default function AuthScreen() {
     </div>
   );
 }
-
