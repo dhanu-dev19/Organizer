@@ -1,12 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  Menu, Star, Zap, ChevronRight, ChevronLeft, Plus, Search,
-  FolderPlus, ArrowUpDown, Calendar, Sun, Moon
+  Menu, Star, Zap, ChevronRight, ChevronLeft, ChevronDown, Plus, Search,
+  FolderPlus, ArrowUpDown, Calendar, Sun, Moon, Check
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
 
 const BRAND_LETTERS = ['L', 'i', 'n', 'k', 'S', 't', 'a', 'c', 'k'];
 const THEME_STORAGE_KEY = 'linkstack_theme';
+
+const DATE_OPTIONS = [
+  { value: 'all', label: 'All Dates' },
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'Last 7 Days' },
+  { value: 'month', label: 'Last 30 Days' }
+];
+
+const SORT_OPTIONS = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'modified', label: 'Modified' }
+];
 
 function AnimatedBrandName() {
   const [visibleCount, setVisibleCount] = useState(0);
@@ -47,6 +60,96 @@ function AnimatedBrandName() {
         );
       })}
     </span>
+  );
+}
+
+function FilterDropdown({ icon: Icon, value, options, onChange, ariaLabel, align = 'left' }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const selectedOption = options.find((opt) => opt.value === value) || options[0];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative w-full sm:w-auto sm:shrink-0">
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`w-full flex items-center justify-between gap-2 pl-2.5 pr-2 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium transition cursor-pointer focus:outline-none ${
+          open
+            ? 'border-blue-500 ring-2 ring-blue-500/20 bg-white'
+            : 'border-slate-200'
+        }`}
+      >
+        <span className="flex items-center gap-1.5 min-w-0">
+          <Icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span className="truncate">{selectedOption.label}</span>
+        </span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${
+            open ? 'rotate-180 text-blue-600' : ''
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className={`absolute ${
+            align === 'right' ? 'right-0' : 'left-0'
+          } mt-1.5 w-full sm:w-44 min-w-[155px] bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 overflow-hidden`}
+        >
+          {options.map((opt) => {
+            const isSelected = opt.value === value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition ${
+                  isSelected
+                    ? 'bg-blue-50 text-blue-700 font-semibold'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="truncate">{opt.label}</span>
+                {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -103,7 +206,7 @@ const Header = React.memo(function Header({
   const parentCrumb = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
 
   return (
-    <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-2.5 sm:py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 shrink-0 transition-colors">
+    <header className="relative z-30 border-b border-slate-200 bg-white px-3 sm:px-6 py-2.5 sm:py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 shrink-0 transition-colors">
       {/* Top Row: Fixed Menu Button + Brand / Breadcrumbs + Mobile Actions */}
       <div className="flex items-center justify-between gap-2 min-w-0 w-full lg:w-auto">
         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -236,7 +339,7 @@ const Header = React.memo(function Header({
         </div>
       </div>
 
-      {/* Controls Row: Search, Filters, Actions & Desktop Theme Toggle */}
+      {/* Controls Row: Search, Custom Dropdowns, Actions & Desktop Theme Toggle */}
       <div className="flex items-center justify-end gap-2 w-full lg:w-auto">
         {selectedFolderId !== 'ai-search' && (
           <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 flex-1 lg:flex-initial">
@@ -252,36 +355,25 @@ const Header = React.memo(function Header({
               />
             </div>
 
-            {/* Date Range Filter (50% width on mobile) */}
-            <div className="relative w-full sm:w-auto sm:shrink-0">
-              <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
-              <select
-                aria-label="Filter by date"
-                value={dateFilter}
-                onChange={(e) => onDateFilterChange(e.target.value)}
-                className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
-              >
-                <option value="all">All Dates</option>
-                <option value="today">Today</option>
-                <option value="week">Last 7 Days</option>
-                <option value="month">Last 30 Days</option>
-              </select>
-            </div>
+            {/* Custom Date Range Dropdown */}
+            <FilterDropdown
+              icon={Calendar}
+              value={dateFilter}
+              options={DATE_OPTIONS}
+              onChange={onDateFilterChange}
+              ariaLabel="Filter by date"
+              align="left"
+            />
 
-            {/* Sort Order Selector (50% width on mobile) */}
-            <div className="relative w-full sm:w-auto sm:shrink-0">
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
-              <select
-                aria-label="Sort items"
-                value={sortBy}
-                onChange={(e) => onSortChange(e.target.value)}
-                className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
-              >
-                <option value="newest">Newest (Desc)</option>
-                <option value="oldest">Oldest (Asc)</option>
-                <option value="modified">Modified</option>
-              </select>
-            </div>
+            {/* Custom Sort Order Dropdown */}
+            <FilterDropdown
+              icon={ArrowUpDown}
+              value={sortBy}
+              options={SORT_OPTIONS}
+              onChange={onSortChange}
+              ariaLabel="Sort items"
+              align="right"
+            />
 
             {/* Desktop Subfolder & Add Link Buttons */}
             {isFolderView && (
