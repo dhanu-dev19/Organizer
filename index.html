@@ -6,8 +6,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google-site-verification" content="alcl_U0HxKBkSZpUlQvI6wPE3qI0-dLTpQ87_-u7dPk" />
     <title>LinkStack</title>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem('linkstack_theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
+
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   Menu, Star, Zap, ChevronRight, ChevronLeft, Plus, Search,
-  FolderPlus, ArrowUpDown, Calendar
+  FolderPlus, ArrowUpDown, Calendar, Sun, Moon
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
 
 const BRAND_LETTERS = ['L', 'i', 'n', 'k', 'S', 't', 'a', 'c', 'k'];
+const THEME_STORAGE_KEY = 'linkstack_theme';
 
 function AnimatedBrandName() {
   const [visibleCount, setVisibleCount] = useState(0);
@@ -20,7 +21,7 @@ function AnimatedBrandName() {
         }
         return prev + 1;
       });
-    }, 85); // Distinct, smooth 85ms delay per letter
+    }, 85);
 
     return () => clearInterval(interval);
   }, []);
@@ -63,6 +64,36 @@ const Header = React.memo(function Header({
   onOpenCreateFolder,
   onOpenAddLink
 }) {
+  // Persistent Light / Dark Theme State (defaults to 'light', persists until toggled)
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      return saved === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore storage restrictions
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  const isDark = theme === 'dark';
+
   const isFolderView =
     selectedFolderId !== null &&
     selectedFolderId !== 'favorites' &&
@@ -72,8 +103,8 @@ const Header = React.memo(function Header({
   const parentCrumb = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
 
   return (
-    <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-2.5 sm:py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 shrink-0">
-      {/* Top Row: Fixed Menu Button + Brand / Breadcrumbs + Mobile Add Button */}
+    <header className="border-b border-slate-200 bg-white px-3 sm:px-6 py-2.5 sm:py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 shrink-0 transition-colors">
+      {/* Top Row: Fixed Menu Button + Brand / Breadcrumbs + Mobile Actions */}
       <div className="flex items-center justify-between gap-2 min-w-0 w-full lg:w-auto">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Pinned Mobile Drawer Toggle */}
@@ -166,8 +197,22 @@ const Header = React.memo(function Header({
           )}
         </div>
 
-        {/* Mobile Quick Subfolder & Add Link Buttons */}
+        {/* Mobile Quick Actions: Theme Toggle + Subfolder + Add Link */}
         <div className="flex items-center gap-1.5 shrink-0 sm:hidden">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="p-2 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-xl transition active:scale-95"
+          >
+            {isDark ? (
+              <Sun className="w-4 h-4 text-amber-400" />
+            ) : (
+              <Moon className="w-4 h-4 text-slate-600" />
+            )}
+          </button>
+
           {isFolderView && (
             <button
               type="button"
@@ -179,6 +224,7 @@ const Header = React.memo(function Header({
               <FolderPlus className="w-4 h-4 text-slate-600" />
             </button>
           )}
+
           <button
             type="button"
             onClick={onOpenAddLink}
@@ -190,75 +236,92 @@ const Header = React.memo(function Header({
         </div>
       </div>
 
-      {/* Controls Row: 2-Column Grid on Mobile, Single Flex Row on Tablet/Desktop */}
-      {selectedFolderId !== 'ai-search' && (
-        <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 w-full lg:w-auto">
-          {/* Search Input (Spans both columns on mobile) */}
-          <div className="relative col-span-2 sm:flex-1 sm:w-48 xl:w-60">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 sm:top-2" />
-            <input
-              type="text"
-              placeholder="Search links, tags..."
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              className="pl-9 pr-3 py-2 sm:py-1.5 bg-slate-50 border border-slate-200 rounded-xl sm:rounded-lg text-xs w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
-            />
-          </div>
+      {/* Controls Row: Search, Filters, Actions & Desktop Theme Toggle */}
+      <div className="flex items-center justify-end gap-2 w-full lg:w-auto">
+        {selectedFolderId !== 'ai-search' && (
+          <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 flex-1 lg:flex-initial">
+            {/* Search Input (Spans both columns on mobile) */}
+            <div className="relative col-span-2 sm:flex-1 sm:w-48 xl:w-60">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 sm:top-2" />
+              <input
+                type="text"
+                placeholder="Search links, tags..."
+                value={searchQuery}
+                onChange={(e) => onSearchChange(e.target.value)}
+                className="pl-9 pr-3 py-2 sm:py-1.5 bg-slate-50 border border-slate-200 rounded-xl sm:rounded-lg text-xs w-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              />
+            </div>
 
-          {/* Date Range Filter (50% width on mobile) */}
-          <div className="relative w-full sm:w-auto sm:shrink-0">
-            <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
-            <select
-              aria-label="Filter by date"
-              value={dateFilter}
-              onChange={(e) => onDateFilterChange(e.target.value)}
-              className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
-            >
-              <option value="all">All Dates</option>
-              <option value="today">Today</option>
-              <option value="week">Last 7 Days</option>
-              <option value="month">Last 30 Days</option>
-            </select>
-          </div>
+            {/* Date Range Filter (50% width on mobile) */}
+            <div className="relative w-full sm:w-auto sm:shrink-0">
+              <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
+              <select
+                aria-label="Filter by date"
+                value={dateFilter}
+                onChange={(e) => onDateFilterChange(e.target.value)}
+                className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
+              >
+                <option value="all">All Dates</option>
+                <option value="today">Today</option>
+                <option value="week">Last 7 Days</option>
+                <option value="month">Last 30 Days</option>
+              </select>
+            </div>
 
-          {/* Sort Order Selector (50% width on mobile) */}
-          <div className="relative w-full sm:w-auto sm:shrink-0">
-            <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
-            <select
-              aria-label="Sort items"
-              value={sortBy}
-              onChange={(e) => onSortChange(e.target.value)}
-              className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
-            >
-              <option value="newest">Newest (Desc)</option>
-              <option value="oldest">Oldest (Asc)</option>
-              <option value="modified">Modified</option>
-            </select>
-          </div>
+            {/* Sort Order Selector (50% width on mobile) */}
+            <div className="relative w-full sm:w-auto sm:shrink-0">
+              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 sm:top-2 pointer-events-none" />
+              <select
+                aria-label="Sort items"
+                value={sortBy}
+                onChange={(e) => onSortChange(e.target.value)}
+                className="w-full pl-8 pr-6 py-2 sm:py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl sm:rounded-lg text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer"
+              >
+                <option value="newest">Newest (Desc)</option>
+                <option value="oldest">Oldest (Asc)</option>
+                <option value="modified">Modified</option>
+              </select>
+            </div>
 
-          {/* Desktop Subfolder & Add Link Buttons */}
-          {isFolderView && (
+            {/* Desktop Subfolder & Add Link Buttons */}
+            {isFolderView && (
+              <button
+                type="button"
+                onClick={() => onOpenCreateFolder(selectedFolderId)}
+                className="hidden sm:flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-medium px-2.5 py-2 rounded-lg transition shrink-0"
+                title="Create Subfolder Here"
+              >
+                <FolderPlus className="w-4 h-4 text-slate-500" />
+                <span className="hidden xl:inline">Subfolder</span>
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => onOpenCreateFolder(selectedFolderId)}
-              className="hidden sm:flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-medium px-2.5 py-2 rounded-lg transition shrink-0"
-              title="Create Subfolder Here"
+              onClick={onOpenAddLink}
+              className="hidden sm:flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3.5 py-2 rounded-lg transition shadow-xs shrink-0"
             >
-              <FolderPlus className="w-4 h-4 text-slate-500" />
-              <span className="hidden xl:inline">Subfolder</span>
+              <Plus className="w-4 h-4" />
+              <span>Add Link</span>
             </button>
-          )}
+          </div>
+        )}
 
-          <button
-            type="button"
-            onClick={onOpenAddLink}
-            className="hidden sm:flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-3.5 py-2 rounded-lg transition shadow-xs shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Link</span>
-          </button>
-        </div>
-      )}
+        {/* Desktop / Tablet Theme Toggle Button */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          title={isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+          aria-label={isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+          className="hidden sm:flex items-center justify-center p-2 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-lg transition shrink-0 active:scale-95"
+        >
+          {isDark ? (
+            <Sun className="w-4 h-4 text-amber-400" />
+          ) : (
+            <Moon className="w-4 h-4 text-slate-600" />
+          )}
+        </button>
+      </div>
     </header>
   );
 });
